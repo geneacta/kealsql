@@ -63,6 +63,10 @@ server; nothing runs but the planner PostgreSQL already has.
   `Bool3`, `Id` / `Slug`, references, migrations.
 * [GRAMMAR.md](GRAMMAR.md) — the syntax, the well-formedness rules, and
   what each construct compiles to.
+* [examples/shop.kealsql](examples/shop.kealsql) — a shop: six tables,
+  two enums, twenty-odd queries and mutations, as an application would
+  ship them; `shop.sql` is what they compile to and `shop.exec.sql` runs
+  them on data.
 
 ## Running it
 
@@ -153,6 +157,7 @@ and says so by name rather than mis-compiling, which is Keal's rule.
 | `tests/cases/*.exec.sql` | run on PostgreSQL after the case's SQL; the rows must be exactly `.exec.out` |
 | `tests/migrations/*/` | `before.kealsql` → `after.kealsql` must print `expected.sql`, apply, then settle to `settled.sql` |
 | `tests/plkeal/*.kealsql` | compiled to `.sql`; the library is built, loaded, and `.exec.sql` must print `.exec.out` |
+| `examples/*.kealsql` | real files, held to the same checks as `tests/cases/` |
 
 ## Status
 

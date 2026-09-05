@@ -22,6 +22,7 @@ package class Val(package val sql: String, package val ty: Ty) {
     package var col: Column? = null
     package var src: Src? = null
     package var isNull: Bool = false         // the `null` literal
+    package var paramName: String = ""       // a parameter, by name
 }
 
 package class Param(package val name: String, package val index: Int, package val ty: Ty, package val sqlType: String)
@@ -576,15 +577,69 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         }
     }
 
+    /// Under `groupBy`, a selected expression either aggregates or is built
+    /// from grouped columns only — the rule SQL checks at run time, here at
+    /// compile time.
     proc checkGrouped(step: Ex, var plan: Plan) {
         for (a in step.args) {
             val v = a.value
-            if (v.kind == "call") { continue }                         // an aggregate
-            val sql = this.emit(v, plan).sql
-            unless (plan.groupBy.contains(sql)) {
-                this.fail(v.line, v.col, "`${sql}` is neither grouped by nor aggregated; SQL would refuse this at run time")
+            if (this.hasAggregate(v)) { continue }
+            val loose = this.ungrouped(v, plan)
+            if (loose != "") {
+                this.fail(v.line, v.col, "`${loose}` is neither grouped by nor aggregated; SQL would refuse this at run time")
             }
         }
+    }
+
+    func hasAggregate(e: Ex): Bool {
+        if (e.kind == "call") {
+            val agg = when (e.text) {
+                "count", "sum", "avg", "min", "max" -> true
+                else -> false
+            }
+            if (agg) { return true }
+        }
+        if (e.kids.any({ this.hasAggregate(it) })) { return true }
+        if (e.args.any({ this.hasAggregate(it.value) })) { return true }
+        for (arm in e.arms) {
+            if (arm.values.any({ this.hasAggregate(it) })) { return true }
+            val body = arm.body
+            if (body != null and this.hasAggregate(body)) { return true }
+        }
+        val subject = e.subject
+        if (subject != null and this.hasAggregate(subject)) { return true }
+        return false
+    }
+
+    /// The SQL of the first column in `e` that is not grouped by; "" if none.
+    func ungrouped(e: Ex, var plan: Plan): String {
+        if (e.kind == "ident" or e.kind == "field") {
+            val v = this.emit(e, plan)
+            if (v.col != null and not plan.groupBy.contains(v.sql)) { return v.sql }
+            return ""
+        }
+        for (k in e.kids) {
+            val r = this.ungrouped(k, plan)
+            if (r != "") { return r }
+        }
+        for (a in e.args) {
+            val r = this.ungrouped(a.value, plan)
+            if (r != "") { return r }
+        }
+        for (arm in e.arms) {
+            for (v in arm.values) {
+                val r = this.ungrouped(v, plan)
+                if (r != "") { return r }
+            }
+            val body = arm.body
+            if (body != null) {
+                val r = this.ungrouped(body, plan)
+                if (r != "") { return r }
+            }
+        }
+        val subject = e.subject
+        if (subject != null) { return this.ungrouped(subject, plan) }
+        return ""
     }
 
     proc warnDropped(v: Ex, e: Val) {
@@ -826,20 +881,21 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return sql
     }
 
-    /// A bare name: a column in exactly one source, then a parameter.
+    /// A bare name: a parameter first — the innermost scope, as in Keal — then
+    /// a column in exactly one source. A column a parameter shadows is
+    /// reached qualified: `Product.sku == sku` reads as it looks.
     func ident(e: Ex, var plan: Plan): Val {
+        val p = this.params.find({ it.name == e.text })
+        if (p != null) {
+            val v = Val("$" + p.index, p.ty)
+            v.paramName = p.name
+            return v
+        }
         val hits = plan.sources.filter({ not it.implicit and it.table.column(e.text) != null })
         if (hits.size > 1) {
             this.fail(e.line, e.col, "`${e.text}` is a column of both `${hits[0].alias}` and `${hits[1].alias}`; say which")
         }
-        if (hits.size == 1) {
-            if (this.params.any({ it.name == e.text })) {
-                this.fail(e.line, e.col, "`${e.text}` is both a parameter and a column of `${hits[0].table.name}`; rename the parameter")
-            }
-            return this.columnVal(hits[0], hits[0].table.column(e.text)!!)
-        }
-        val p = this.params.find({ it.name == e.text })
-        if (p != null) { return Val("$" + p.index, p.ty) }
+        if (hits.size == 1) { return this.columnVal(hits[0], hits[0].table.column(e.text)!!) }
         if (this.bindings.containsKey(e.text)) { this.fail(e.line, e.col, "`${e.text}` is a query fragment; it is used as a source, or on the right of `in` with a `select`") }
         if (this.schema.tables.containsKey(e.text)) { this.fail(e.line, e.col, "`${e.text}` is a table; a query reaches it with `from(${e.text})`") }
         if (this.schema.isEnum(e.text)) { this.fail(e.line, e.col, "`${e.text}` is an enum; name one of its values: `${e.text}.${this.schema.enums[e.text]!!.values[0]}`") }
@@ -1030,6 +1086,11 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         val second = this.emitAs(if (leftBare) { e.kids[0] } else { e.kids[1] }, plan, first.ty)
         val a = if (leftBare) { second } else { first }
         val b = if (leftBare) { first } else { second }
+        if (a.paramName != "" and a.paramName == b.paramName) {
+            val col = plan.sources.find({ not it.implicit and it.table.column(a.paramName) != null })
+            val hint = if (col != null) { "; the column is `${col.alias}.${a.paramName}`" } else { "" }
+            this.fail(e.line, e.col, "both sides are the parameter `${a.paramName}`${hint}")
+        }
         when (op) {
             "+", "-", "*", "/", "%" -> {
                 unless (this.isNumeric(a.ty) and this.isNumeric(b.ty)) {

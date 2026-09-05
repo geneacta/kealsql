@@ -23,7 +23,7 @@ Keal's lexer, plus:
 | Addition | Class | Note |
 |---|---|---|
 | `unknown` | reserved value | beside `true`, `false`, `less`, `equal`, `greater` |
-| `===`, `!==` | operator, equality tier | null-safe comparison; spelling is a placeholder |
+| `===`, `!==` | operator, equality tier | null-safe comparison |
 
 **Contextual words** — a declaration where one follows, an ordinary name
 everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
@@ -261,11 +261,13 @@ assignment, `while` / `for`. Added: `===` / `!==` at the equality tier, and
 
 ### Names
 
-A bare identifier in a pipeline resolves against the columns of the tables
-in scope — the `from` table and every `join`ed one — then against the
-function's parameters, then against `val` bindings. An ambiguous column
-(present in two tables in scope) is an error naming both; qualify it with
-the table or its alias: `p.title`, `Post.title`.
+A bare identifier in a pipeline resolves against the function's parameters
+first — the innermost scope, as in Keal — then against the columns of the
+tables in scope, the `from` table and every `join`ed one. A column a
+parameter shadows is reached qualified: `where(Product.sku == sku)`. An
+ambiguous column (present in two tables in scope) is an error naming both;
+qualify it with the table or its alias: `p.title`, `Post.title`. The same
+parameter on both sides of a comparison is refused, naming the column.
 
 A dotted path through a reference is an implicit join:
 

@@ -169,9 +169,10 @@ Two rules reconcile Keal's `==` with SQL's `=`:
 The way out of `Bool3` is the null-safe pair — "compare, and treat null as a
 value": `a === b` (`IS NOT DISTINCT FROM`) and `a !== b` (`IS DISTINCT FROM`),
 both always `Bool`. Keal's `<==>` is the precedent: "does the order separate
-them at all — which is not the question `==` asks". *(Spelling is a
-placeholder: two characters, "stricter", the JavaScript baggage means
-something else.)*
+them at all — which is not the question `==` asks". The spelling is
+settled: one character more than the question it refines, and "stricter"
+is the right intuition even though JavaScript's `===` is strict about
+something else.
 
 Why a primitive rather than `Bool?`:
 
@@ -374,6 +375,11 @@ parentheses.
   so leaving it in for a while costs nothing.
 * The suite applies each test migration in one transaction and runs the
   diff again: it must then print nothing but the notes.
+* **Names.** A parameter shadows a column of the same name, as an inner
+  scope shadows an outer one in Keal: `where(Product.sku == sku)` compares
+  the column with the parameter, and a bare `sku` is the parameter. The
+  shadowed column is reached qualified; `sku == sku` — the parameter on
+  both sides — is refused with the qualified column named.
 * Out of scope for v1: data migrations (backfills), sequences on a column
   that becomes `Serial`, and anything but PostgreSQL.
 
@@ -407,8 +413,6 @@ Mappings:
 
 ## 5. Open questions
 
-* Spelling of the null-safe comparison operators (`===` / `!==` is a
-  placeholder).
 * `plkeal`: cells cross as text and are parsed on the Keal side; a binary
   path (`SPI_getbinval`) is the optimisation when a profile asks for it.
   A `pure` function that runs a query is declared `IMMUTABLE` wrongly, and

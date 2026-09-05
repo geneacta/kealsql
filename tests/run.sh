@@ -27,7 +27,7 @@ check() {
     else echo "FAIL $f"; printf '%s\n' "$out" | diff -u "$exp" - | head -20; failed=1
     fi
 }
-for f in tests/cases/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
+for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
 for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
 
 # ---- against a real PostgreSQL
@@ -44,7 +44,7 @@ trap stop EXIT
 "$PGBIN/pg_ctl" -D "$PGDIR/data" -o "-k $PGDIR -p $PORT -h ''" -l "$PGDIR/server.log" -w start > /dev/null 2>&1 || { echo "FAIL pg_ctl start"; tail -5 "$PGDIR/server.log"; exit 1; }
 PSQL="$PGBIN/psql -h $PGDIR -p $PORT -U kealsql -q -A -v ON_ERROR_STOP=1"
 export PGHOST="$PGDIR" PGPORT="$PORT" PGUSER=kealsql PATH="$PGBIN:$PATH"
-for f in tests/cases/*.sql; do
+for f in tests/cases/*.sql examples/*.sql; do
     case "$f" in *.exec.sql) continue;; esac
     name=$(basename "${f%.sql}")
     $PSQL -d postgres -c "CREATE DATABASE $name" > /dev/null

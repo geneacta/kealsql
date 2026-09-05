@@ -1,0 +1,185 @@
+// A shop: the schema and the queries an application would ship with.
+// Written as a real file rather than a test, to meet the language on
+// ground its tests did not prepare.
+
+enum OrderStatus { Cart, Placed, Paid, Shipped, Cancelled }
+enum Rating { One, Two, Three, Four, Five }
+
+table Customer {
+    id:      Id
+    email:   Slug
+    name:    String
+    since:   Date
+    credit:  Int
+}
+
+table Category {
+    id:     Id
+    slug:   Slug
+    title:  String
+    parent: RefId<Category>?
+}
+
+table Product {
+    id:        Id
+    sku:       Slug
+    title:     String
+    category:  RefId<Category>
+    priceCents: Int
+    stock:     Int
+    weightKg:  Float?
+    retired:   Bool
+}
+
+table Order {
+    id:        Id
+    cascade customer: RefId<Customer>
+    status:    OrderStatus
+    placedAt:  Timestamp?
+    note:      String(200)?
+}
+
+table OrderLine {
+    id:       Id
+    cascade order: RefId<Order>
+    product:  RefId<Product>
+    quantity: Int
+    unitCents: Int
+    unique(order, product)
+}
+
+table Review {
+    id:       Id
+    cascade product: RefId<Product>
+    cascade author: RefId<Customer>
+    rating:   Rating
+    body:     String?
+    unique(product, author)
+}
+
+// ---- catalogue
+
+func productBySku(sku: String): Product? {
+    from(Product).where(Product.sku == sku).select(*).first()
+}
+
+func inCategory(slug: String): List<(String, String, Int)> {
+    from(Product as p)
+        .where(p.category.slug == slug and not p.retired)
+        .orderBy(p.title)
+        .select(p.sku, p.title, p.priceCents)
+}
+
+func topLevelCategories(): List<(String, String)> {
+    from(Category).where(parent == null).orderBy(title).select(slug, title)
+}
+
+func subcategories(of: String): List<String> {
+    from(Category as c).where(c.parent?.slug == of).orderBy(c.title).select(c.title)
+}
+
+func lowStock(threshold: Int): List<(String, Int)> {
+    from(Product).where(stock < threshold and not retired).orderBy(stock, sku).select(sku, stock)
+}
+
+func heavyOrLight(): List<(String, String)> {
+    from(Product).orderBy(sku).select(sku, when {
+        weightKg == null -> "unknown"
+        weightKg!! > 10.0 -> "heavy"
+        else -> "light"
+    })
+}
+
+// ---- orders
+
+func openCart(customer: Int): Order? {
+    from(Order).where(Order.customer == customer and status == Cart).select(*).first()
+}
+
+func orderTotal(order: Int): Int? {
+    from(OrderLine as l).where(l.order == order).select(sum(l.quantity * l.unitCents)).single()
+}
+
+func orderLines(order: Int): List<(String, Int, Int)> {
+    from(OrderLine as l).where(l.order == order).orderBy(l.product.title).select(l.product.title, l.quantity, l.unitCents)
+}
+
+func ordersOf(email: String): List<(Int, OrderStatus, Timestamp?)> {
+    from(Order as o).where(o.customer.email == email).orderBy(o.id.desc).select(o.id, o.status, o.placedAt)
+}
+
+func revenueByStatus(): List<(OrderStatus, Int)> {
+    from(Order as o)
+        .join(OrderLine as l, l.order == o.id)
+        .groupBy(o.status)
+        .select(o.status, sum(l.quantity * l.unitCents) ?: 0)
+}
+
+func bigSpenders(minCents: Int): List<(String, Int)> {
+    from(Customer as c)
+        .join(Order as o, o.customer == c.id)
+        .join(OrderLine as l, l.order == o.id)
+        .where(o.status == Paid or o.status == Shipped)
+        .groupBy(c.email)
+        .where(sum(l.quantity * l.unitCents) >= minCents)
+        .orderBy(c.email)
+        .select(c.email, sum(l.quantity * l.unitCents) ?: 0)
+}
+
+func neverOrdered(): List<String> {
+    val buyers = from(Order).where(status != Cart)
+    from(Customer).unless(id in buyers.select(customer)).orderBy(email).select(email)
+}
+
+func hasPaidOrders(customer: Int): Bool {
+    from(Order).where(Order.customer == customer and status == Paid).exists()
+}
+
+// ---- reviews
+
+func averageRating(product: Int): Float? {
+    from(Review).where(Review.product == product).select(avg(when (rating) {
+        One -> 1
+        Two -> 2
+        Three -> 3
+        Four -> 4
+        Five -> 5
+    })).single()
+}
+
+func reviewsWithText(product: Int): List<(String, Rating, String)> {
+    from(Review as r)
+        .where(r.product == product and r.body != null)
+        .orderBy(r.id)
+        .select(r.author.name, r.rating, r.body ?: "")
+}
+
+// ---- mutations
+
+func newCustomer(email: String, name: String, since: Date): Customer {
+    insert(Customer(email = email, name = name, since = since, credit = 0))
+}
+
+func startCart(customer: Int): Order {
+    insert(Order(customer = customer, status = Cart))
+}
+
+proc addLine(order: Int, product: Int, quantity: Int, unitCents: Int) {
+    insert(OrderLine(order = order, product = product, quantity = quantity, unitCents = unitCents))
+}
+
+proc place(order: Int, at: Timestamp) {
+    update(Order).where(id == order and status == Cart).set(status = Placed, placedAt = at)
+}
+
+proc restock(sku: String, by: Int) {
+    update(Product).where(Product.sku == sku).set(stock = stock + by)
+}
+
+proc retire(sku: String) {
+    update(Product).where(Product.sku == sku).set(retired = true)
+}
+
+proc forgetCustomer(email: String) {
+    delete(Customer).where(Customer.email == email)
+}

@@ -1,0 +1,100 @@
+id|email|name|since|credit
+1|ada@x|Ada|2026-01-10|0
+(1 row)
+id|email|name|since|credit
+2|bob@x|Bob|2026-02-20|0
+(1 row)
+id|email|name|since|credit
+3|cy@x|Cy|2026-03-30|0
+(1 row)
+slug|title
+garden|Garden
+tools|Tools
+(2 rows)
+title
+Hand tools
+Power tools
+(2 rows)
+sku|title|price_cents
+HAM-1|Hammer|1500
+SAW-1|Hand saw|2200
+(2 rows)
+sku|stock
+MOW-1|1
+SAW-1|3
+(2 rows)
+sku|case
+DRL-1|light
+HAM-1|light
+MOW-1|heavy
+OLD-1|unknown
+SAW-1|unknown
+(5 rows)
+id|sku|title|category|price_cents|stock|weight_kg|retired
+3|DRL-1|Drill|3|8900|7|2.4|f
+(1 row)
+id|sku|title|category|price_cents|stock|weight_kg|retired
+(0 rows)
+id|customer|status|placed_at|note
+1|1|Cart||
+(1 row)
+sum
+11900
+(1 row)
+title|quantity|unit_cents
+Drill|1|8900
+Hammer|2|1500
+(2 rows)
+id|customer|status|placed_at|note
+2|2|Cart||
+(1 row)
+id|customer|status|placed_at|note
+2|2|Cart||
+(1 row)
+id|customer|status|placed_at|note
+(0 rows)
+id|status|placed_at
+1|Paid|2026-04-01 10:00:00
+(1 row)
+status|coalesce
+Cart|45000
+Paid|11900
+(2 rows)
+email|coalesce
+ada@x|11900
+(1 row)
+email|coalesce
+(0 rows)
+email
+bob@x
+cy@x
+(2 rows)
+exists
+t
+(1 row)
+exists
+f
+(1 row)
+avg
+4.0000000000000000
+(1 row)
+avg
+
+(1 row)
+name|rating|coalesce
+Ada|Five|Drills.
+(1 row)
+sku|stock
+MOW-1|1
+(1 row)
+sku|title|price_cents
+HAM-1|Hammer|1500
+(1 row)
+orders|lines|reviews
+1|1|1
+(1 row)
+psql:examples/shop.exec.sql:52: ERROR:  duplicate key value violates unique constraint "order_line_order_product_key"
+DETAIL:  Key ("order", product)=(2, 4) already exists.
+after_error
+still alive
+(1 row)
