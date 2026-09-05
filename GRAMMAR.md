@@ -23,7 +23,7 @@ Keal's lexer, plus:
 | Addition | Class | Note |
 |---|---|---|
 | `unknown` | reserved value | beside `true`, `false`, `less`, `equal`, `greater` |
-| `===`, `!==` | operator, equality tier | null-safe comparison |
+| `===`, `!==` | operator, equality tier | null-safe comparison; read by the parser as `==` / `!=` followed by an adjacent `=` |
 
 **Contextual words** — a declaration where one follows, an ordinary name
 everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
@@ -414,11 +414,13 @@ loads with `--lib DIR/<stem>.so` (without it, `$libdir/<stem>`).
 
 ## 8. Implementation notes
 
-* **Lexer:** `keal/selfhost/lexing.keal`, **vendored** as `src/lexing.keal`
-  — its declarations are `package`, visible only beside it, so an import
-  from another repository sees nothing. `ci/sync-lexer.sh` diffs the copy
-  against the original; the diff is the header plus the lines marked
-  `kealsql:` (`===`, `!==`, `unknown`).
+* **Lexer:** `keal/selfhost/lexing.keal`, imported from the pinned `keal`
+  dependency (`import "dep:keal/selfhost/lexing.keal"`) — its public face
+  is `lexFile`, `Token`, `Part`, `describeToken`, `tokenDumpLine`,
+  `lexErrorPrefix`, promised by Keal since `0f2e5e9`. KealSql's three
+  lexical additions are read by the parser on Keal's tokens: `===` / `!==`
+  are `==` / `!=` with an adjacent `=`, and `unknown` is the identifier in
+  value position, refused as a name.
 * **Parser:** KealSql's own, `src/parser.keal`, ~450 lines. Keal's
   expression tiers were not copied: they build Keal's AST, and KealSql's
   is smaller. The precedence table is Keal's, connective mixing is refused

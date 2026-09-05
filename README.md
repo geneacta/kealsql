@@ -71,10 +71,9 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least `9709d1b` (after 1.2.0): `runCommand` with a standard
-input, which `--migrate` uses to talk to `psql`; `keal_runtime_init`,
-which a stored function's library calls when PostgreSQL loads it; and
-records with optional value fields compiling natively.
+`../keal` — at least `2790611` (after 1.2.0): `runCommand` with a standard
+input, `keal_runtime_init`, `Nothing` in the C backend, and the public
+lexer.
 
 ```sh
 keal src/main.keal file.kealsql                          # print the SQL
@@ -135,17 +134,19 @@ settles; each `tests/plkeal/*.kealsql` has its library built (server
 headers and a C compiler needed) and loaded, and its functions run.
 Without `initdb` it says so and compares the SQL only.
 
-The compiler runs on Keal's bytecode VM. `keal build` refuses it for now —
-its error path returns `Nothing`, which the C backend does not cover yet —
-and says so by name rather than mis-compiling, which is Keal's rule.
+The compiler runs on Keal's VM as written, and `keal build src/main.keal
+-o kealsql` compiles it to a native binary; the suite builds that binary
+and holds it to the same bytes as the VM on every case. The lexer is
+Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
+`keal fetch` puts it under `.keal/deps/` (the suite runs it when missing).
 
 ## Layout
 
 | | |
 |---|---|
-| `src/lexing.keal` | Keal's own lexer, vendored from `keal/selfhost` with the `===` / `!==` tokens and the `unknown` word added; `ci/sync-lexer.sh` shows the diff |
+| `keal.toml` | the `keal` dependency, pinned to a commit: the lexer is imported from it |
 | `src/ast.keal` | the syntax tree |
-| `src/parser.keal` | items (`table`, `enum`, `func`, `proc`) and Keal's expression precedence |
+| `src/parser.keal` | items (`table`, `enum`, `func`, `proc`, `stored func`) and Keal's expression precedence over Keal's tokens; `===`, `!==` and `unknown` are read here |
 | `src/schema.keal` | the resolved schema and SQL naming |
 | `src/compile.keal` | checker and emitter, one pass: a `Val` is an expression's SQL and its type |
 | `src/catalog.keal` | the live schema, read from `pg_catalog` through `psql` |
@@ -170,7 +171,7 @@ DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 paths as implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
 functions in Keal compiled to `LANGUAGE C`, calling the file's queries
-through SPI with typed results. Not yet: native compilation of the
-compiler itself (`Nothing` in Keal's C backend).
+through SPI with typed results — all of it compiled natively as well as
+run on the VM.
 
 Licensed under Apache-2.0, like Keal.

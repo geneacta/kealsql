@@ -11,9 +11,24 @@
 // is what recognises `from(...)...select(...)` in it.
 //
 // Failure is loud: print `error L:C message` and stop, the way Keal does.
+//
+// The lexer is Keal's own, imported from the pinned dependency. KealSql's
+// three lexical additions are read here on top of Keal's tokens: `===` and
+// `!==` are `==` / `!=` with an adjacent `=`, and `unknown` is the identifier
+// in value position (and refused as a name).
 
-import "./lexing.keal"
+import "dep:keal/selfhost/lexing.keal"
 import "./ast.keal"
+
+/// How many bytes a character occupies in UTF-8 — the unit Keal's lexer
+/// counts columns in.
+func byteWidth(c: String): Int {
+    val n = c.code()
+    if (n < 128) { return 1 }
+    if (n < 2048) { return 2 }
+    if (n < 65536) { return 3 }
+    return 4
+}
 
 func describeKind(kind: String): String {
     return when (kind) {
@@ -202,6 +217,7 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
         }
         val t = this.peek()
         val name = this.expectIdent("a column name")
+        if (name == "unknown") { this.fail(t.line, t.col, "`unknown` is the third value of a `Bool3`; it cannot name a column") }
         this.expect(":", "after the column's name")
         val c = ColumnN(name, this.typeExpr(), t.line, t.col)
         c.mods = mods
@@ -300,6 +316,7 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
     func param(): ParamN {
         val t = this.peek()
         val name = this.expectIdent("a parameter name")
+        if (name == "unknown") { this.fail(t.line, t.col, "`unknown` is the third value of a `Bool3`; it cannot name a parameter") }
         this.expect(":", "after the parameter's name")
         return ParamN(name, this.typeExpr(), t.line, t.col)
     }
@@ -355,28 +372,40 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
 
     func expr(): Ex { this.binary(1, "") }
 
+    /// The operator ahead, with `===` / `!==` read as `==` / `!=` and an
+    /// adjacent `=` — Keal's lexer does not know them.
+    func operatorAhead(): String {
+        val t = this.peek()
+        if ((t.kind == "==" or t.kind == "!=") and this.peekAt(1).kind == "=" and this.peekAt(1).line == t.line and this.peekAt(1).col == t.col + 2) {
+            return t.kind + "="
+        }
+        return t.kind
+    }
+
     func binary(minPower: Int, prevConnective: String): Ex {
         var left = this.unary()
         var seen = prevConnective
         while (true) {
             val t = this.peek()
-            val p = powerOf(t.kind)
+            val op = this.operatorAhead()
+            val p = powerOf(op)
             if (p == 0 or p < minPower) { break }
             this.advance()
-            if (isConnective(t.kind)) {
-                if (seen != "" and seen != t.kind) {
-                    this.fail(t.line, t.col, "`${seen}` and `${t.kind}` need parentheses to say which applies first")
+            if (op == "===" or op == "!==") { this.advance() }
+            if (isConnective(op)) {
+                if (seen != "" and seen != op) {
+                    this.fail(t.line, t.col, "`${seen}` and `${op}` need parentheses to say which applies first")
                 }
-                seen = t.kind
+                seen = op
             }
             // `?:` is right-associative; everything else groups to the left.
-            val right = if (t.kind == "?:") { this.binary(p, seen) } else { this.binary(p + 1, seen) }
-            val kind = when (t.kind) {
+            val right = if (op == "?:") { this.binary(p, seen) } else { this.binary(p + 1, seen) }
+            val kind = when (op) {
                 "?:" -> "elvis"
-                else -> if (isConnective(t.kind)) { "logical" } else { "binary" }
+                else -> if (isConnective(op)) { "logical" } else { "binary" }
             }
             val e = Ex(kind, t.line, t.col)
-            e.text = t.kind
+            e.text = op
             e.kids = [left, right]
             left = e
         }
@@ -495,7 +524,6 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 return e
             }
             "null" -> { this.advance(); return Ex("null", t.line, t.col) }
-            "unknown" -> { this.advance(); return Ex("unknown", t.line, t.col) }
             "less", "equal", "greater" -> {
                 this.advance()
                 val e = Ex("comp", t.line, t.col)
@@ -504,6 +532,7 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
             }
             "ident" -> {
                 this.advance()
+                if (t.text == "unknown") { return Ex("unknown", t.line, t.col) }
                 if (this.at("(")) {
                     val e = Ex("call", t.line, t.col)
                     e.text = t.text

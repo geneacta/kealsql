@@ -13,22 +13,37 @@
 cd "$(dirname "$0")/.." || exit 2
 KEAL="${KEAL:-../keal/target/release/keal}"
 case "$KEAL" in */*) KEAL="$(cd "$(dirname "$KEAL")" && pwd)/$(basename "$KEAL")";; esac   # build.sh cd's away
+[ -f .keal/deps/keal/selfhost/lexing.keal ] || "$KEAL" fetch > /dev/null || { echo "FAIL keal fetch: the lexer comes from the pinned keal"; exit 1; }
 failed=0
+RUN="$KEAL src/main.keal"                # how a case is compiled: the VM, then the native binary
+TAG=""                                   # "[native] " on the second pass
 
 check() {
     f="$1"; exp="$2"; want="$3"
-    out=$("$KEAL" src/main.keal "$f" 2>&1); code=$?
+    out=$($RUN "$f" 2>&1); code=$?
     if [ "$code" != "$want" ]; then
-        echo "FAIL $f: exit $code, expected $want"; echo "$out" | head -5; failed=1; return
+        echo "FAIL $TAG$f: exit $code, expected $want"; echo "$out" | head -5; failed=1; return
     fi
-    if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$exp"; fi
+    if [ -n "$UPDATE" ] && [ -z "$TAG" ]; then printf '%s\n' "$out" > "$exp"; fi
     if [ ! -f "$exp" ]; then echo "FAIL $f: no $exp (UPDATE=1 to write it)"; failed=1; return; fi
-    if printf '%s\n' "$out" | diff -u "$exp" - > /dev/null; then echo "ok   $f"
-    else echo "FAIL $f"; printf '%s\n' "$out" | diff -u "$exp" - | head -20; failed=1
+    if printf '%s\n' "$out" | diff -u "$exp" - > /dev/null; then echo "ok   $TAG$f"
+    else echo "FAIL $TAG$f"; printf '%s\n' "$out" | diff -u "$exp" - | head -20; failed=1
     fi
 }
 for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
 for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
+
+# ---- the compiler itself, compiled natively, must answer the same bytes
+NATIVE=$(mktemp -d)/kealsql
+if "$KEAL" build src/main.keal -o "$NATIVE" > "$NATIVE.log" 2>&1; then
+    RUN="$NATIVE"; TAG="[native] "
+    for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
+    for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
+    RUN="$KEAL src/main.keal"; TAG=""
+else
+    echo "FAIL keal build src/main.keal"; grep -E "error" "$NATIVE.log" | head -5; failed=1
+fi
+rm -rf "$(dirname "$NATIVE")"
 
 # ---- against a real PostgreSQL
 PGBIN=$(command -v initdb > /dev/null && dirname "$(command -v initdb)" || ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)

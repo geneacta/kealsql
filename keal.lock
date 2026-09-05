@@ -1,0 +1,10 @@
+# Written by `keal fetch`. It records the commit each dependency
+# resolved to, so that a tag moved upstream cannot silently change what
+# this project builds against. Commit it.
+
+[[dependency]]
+name = "keal"
+git = "https://github.com/geneacta/keal"
+rev = "2790611"
+commit = "27906110853a3cf684e0369bee3b5bbcd77f4dc5"
+asked_by = "kealsql"
