@@ -45,8 +45,9 @@ package class Plan() {
     package var rowTable: String = ""        // select(*): the table
 }
 
-package class Compiler(val file: String, package val program: ProgramN) {
+package class Compiler(package val file: String, package val program: ProgramN) {
     package var schema: Schema = Schema()
+    package var lib: String = ""             // the plkeal library path for CREATE FUNCTION; "" for $libdir
     var params: List<Param> = []
     var bindings: Map<String, Ex> = {}
     var current: String = ""                 // the func being compiled, for messages
@@ -74,6 +75,55 @@ package class Compiler(val file: String, package val program: ProgramN) {
         // Columns first, references second: a reference needs its target's columns.
         for (name in this.schema.tableOrder) { this.resolveColumns(this.schema.tables[name]!!) }
         for (name in this.schema.tableOrder) { this.resolveReferences(this.schema.tables[name]!!) }
+        for (s in this.program.stored) { this.checkStored(s) }
+    }
+
+    /// A stored function's signature: the four value types, none optional —
+    /// the function is STRICT, so PostgreSQL answers null to a null itself.
+    proc checkStored(s: StoredN) {
+        if (this.program.stored.filter({ it.name == s.name }).size > 1) { this.fail(s.line, s.col, "stored function `${s.name}` is declared twice") }
+        if (this.schema.tables.containsKey(s.name) or this.schema.isEnum(s.name)) { this.fail(s.line, s.col, "`${s.name}` is already a table or an enum") }
+        if (this.program.funs.any({ it.name == s.name })) { this.fail(s.line, s.col, "`${s.name}` is already a query") }
+        for (p in s.params) { this.storedType(p.ty, "parameter `${p.name}`") }
+        this.storedType(s.ret!!, "the result")
+    }
+
+    proc storedType(t: TypeN, what: String) {
+        val ok = when (t.name) {
+            "Int", "Float", "Bool", "String" -> true
+            else -> false
+        }
+        unless (ok) { this.fail(t.line, t.col, "${what} of a stored function is an `Int`, `Float`, `Bool` or `String`, not `${t.render()}`") }
+        if (t.optional) { this.fail(t.line, t.col, "${what} cannot be optional: a stored function is STRICT, and PostgreSQL answers null to a null itself") }
+        if (t.len > 0) { this.fail(t.line, t.col, "a stored function takes a `String`, not a `String(${t.len})`") }
+    }
+
+    /// The SQL type a stored function's value has. `Int` is Keal's 64-bit integer.
+    func storedSqlType(t: TypeN): String {
+        return when (t.name) {
+            "Int" -> "bigint"
+            "Float" -> "double precision"
+            "Bool" -> "boolean"
+            else -> "text"
+        }
+    }
+
+    package func storedDdl(): String {
+        var out = ""
+        for (s in this.program.stored) {
+            val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
+            val params = s.params.map({ this.storedSqlType(it.ty) }).join(", ")
+            out += "CREATE OR REPLACE FUNCTION ${sqlName(s.name)}(${params}) RETURNS ${this.storedSqlType(s.ret!!)}\n"
+            out += "    AS '${lib}', 'kealsql_${snakeName(s.name)}' LANGUAGE C STRICT${if (s.pure) { " IMMUTABLE" } else { "" }};\n\n"
+        }
+        return out
+    }
+
+    /// `blog` for `path/to/blog.kealsql`: the library's name.
+    package func libStem(): String {
+        var base = this.file.split("/").last() ?: this.file
+        if (base.endsWith(".kealsql")) { base = base.take(base.length - 8) }
+        return snakeName(base)
     }
 
     proc resolveColumns(var table: Table) {
@@ -906,11 +956,34 @@ package class Compiler(val file: String, package val program: ProgramN) {
             }
             "from", "insert", "update", "delete" -> { this.fail(e.line, e.col, "`${e.text}` starts a query; it cannot sit inside an expression") }
             else -> {
+                val s = this.program.stored.find({ it.name == e.text })
+                if (s != null) { return this.storedCall(e, s, plan) }
                 if (this.schema.tables.containsKey(e.text)) { this.fail(e.line, e.col, "a row `${e.text}(...)` is only written inside `insert(...)`") }
                 this.fail(e.line, e.col, "`${e.text}` is not a function KealSql knows")
             }
         }
         return this.lit("", "")
+    }
+
+    /// A stored function in an expression. STRICT: an optional argument makes
+    /// the result optional, and PostgreSQL never calls the function on a null.
+    func storedCall(e: Ex, s: StoredN, var plan: Plan): Val {
+        if (e.args.size != s.params.size) { this.fail(e.line, e.col, "`${s.name}` takes ${s.params.size} argument${if (s.params.size == 1) { "" } else { "s" }}") }
+        val sqls: List<String> = []
+        var opt = false
+        var i = 0
+        while (i < e.args.size) {
+            val a = e.args[i]
+            if (a.name != "") { this.fail(a.value.line, a.value.col, "a stored function takes its arguments in order") }
+            val v = this.emit(a.value, plan)
+            val want = Ty(s.params[i].ty.name, false)
+            if (v.isNull) { this.fail(a.value.line, a.value.col, "`${s.name}` is STRICT: a null argument answers null; there is nothing to call") }
+            unless (this.sameType(v.ty, want)) { this.fail(a.value.line, a.value.col, "`${s.params[i].name}` of `${s.name}` is a `${want.name}`, not `${this.renderTy(v.ty)}`") }
+            if (v.ty.optional) { opt = true }
+            sqls.add(v.sql)
+            i += 1
+        }
+        return Val("${sqlName(s.name)}(${sqls.join(", ")})", Ty(s.ret!!.name, opt))
     }
 
     func binary(e: Ex, var plan: Plan): Val {
@@ -1087,7 +1160,7 @@ package class Compiler(val file: String, package val program: ProgramN) {
 
     package func compile(): String {
         this.resolveSchema()
-        var out = this.ddl()
+        var out = this.ddl() + this.storedDdl()
         for (f in this.program.funs) { out += this.compileFun(f) + "\n" }
         return out
     }

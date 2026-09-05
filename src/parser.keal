@@ -54,8 +54,9 @@ func isModifier(w: String): Bool {
     }
 }
 
-package class Parser(val toks: List<Token>, val file: String) {
+package class Parser(val toks: List<Token>, val file: String, val source: String) {
     var pos: Int = 0
+    var lineStarts: List<Int> = []          // char offset of each line's first character
 
     func peek(): Token { this.toks[this.pos.min(this.toks.size - 1)] }
     func peekAt(k: Int): Token { this.toks[(this.pos + k).min(this.toks.size - 1)] }
@@ -116,6 +117,8 @@ package class Parser(val toks: List<Token>, val file: String) {
                 p.tables.add(t)
             } else if (this.atWord("enum") and this.peekAt(1).kind == "ident") {
                 p.enums.add(this.enumDecl())
+            } else if (this.atWord("stored") and (this.peekAt(1).kind == "func" or this.peekAt(1).kind == "proc" or (this.peekAt(1).kind == "ident" and this.peekAt(1).text == "pure"))) {
+                p.stored.add(this.storedDecl())
             } else if (this.at("func")) {
                 p.funs.add(this.funDecl(true))
             } else if (this.at("proc")) {
@@ -237,6 +240,61 @@ package class Parser(val toks: List<Token>, val file: String) {
         this.skipSemis()
         this.expect("}", "to close the body")
         return f
+    }
+
+    /// `stored [pure] func name(params): Ret { ...Keal... }` — the signature is
+    /// parsed; the body is sliced out of the source by its braces and kept
+    /// as text for the Keal toolchain.
+    func storedDecl(): StoredN {
+        val t = this.advance()                                 // `stored`
+        var pure = false
+        if (this.atWord("pure")) { this.advance(); pure = true }
+        if (this.at("proc")) { this.failHere("a stored function answers SQL something; write `stored func ...: Type`") }
+        this.expect("func", "after `stored`")
+        val s = StoredN(this.expectIdent("a name after `stored func`"), t.line, t.col)
+        s.pure = pure
+        this.expect("(", "after the function's name")
+        if (not this.at(")")) {
+            s.params.add(this.param())
+            while (this.eat(",")) { s.params.add(this.param()) }
+        }
+        this.expect(")", "to close the parameter list")
+        this.expect(":", "before a stored function's result type")
+        s.ret = this.typeExpr()
+        if (not this.at("{")) { this.failHere("expected `{` to open the body, found ${describeToken(this.peek())}") }
+        val open = this.advance()
+        var depth = 1
+        while (depth > 0) {
+            if (this.at("eof")) { this.fail(open.line, open.col, "the body opened here never closes") }
+            val k = this.advance().kind
+            if (k == "{") { depth += 1 }
+            if (k == "}") { depth -= 1 }
+        }
+        val close = this.toks[this.pos - 1]
+        s.body = this.source.substring(this.offsetOf(open.line, open.col) + 1, this.offsetOf(close.line, close.col))
+        return s
+    }
+
+    /// The character offset of a token: the lexer counts columns in bytes.
+    func offsetOf(line: Int, col: Int): Int {
+        if (this.lineStarts.isEmpty()) {
+            var at = 0
+            for (l in lines(this.source)) {
+                this.lineStarts.add(at)
+                at += l.length + 1
+            }
+            this.lineStarts.add(at)
+        }
+        val start = this.lineStarts[(line - 1).min(this.lineStarts.size - 1)]
+        val text = lines(this.source)[(line - 1).min(this.lineStarts.size - 2)]
+        var bytes = 1
+        var chars = 0
+        for (c in text) {
+            if (bytes >= col) { break }
+            bytes += byteWidth(c)
+            chars += 1
+        }
+        return start + chars
     }
 
     func param(): ParamN {
@@ -511,5 +569,5 @@ package class Parser(val toks: List<Token>, val file: String) {
 
 package func parseFile(path: String, source: String): ProgramN {
     lexErrorPrefix = "${path}:"
-    return Parser(lexFile(source), path).program()
+    return Parser(lexFile(source), path, source).program()
 }

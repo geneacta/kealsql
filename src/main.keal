@@ -3,6 +3,9 @@
 //   keal src/main.keal file.kealsql                       the SQL: schema, then one PREPARE per func / proc
 //   keal src/main.keal --migrate file.kealsql [--db NAME] [--destructive]
 //                                                          the migration from a live database to the file
+//   keal src/main.keal --plkeal DIR file.kealsql            the stored functions as a Keal program and a
+//                                                          build script for the PostgreSQL shared library
+//   keal src/main.keal --lib PATH file.kealsql             the SQL, with CREATE FUNCTION naming that library
 //
 // `--migrate` reads the database through `psql`; `--db` is psql's `-d`, and
 // without it the PG* environment and ~/.pgpass decide, as for psql itself.
@@ -13,10 +16,13 @@
 import "./parser.keal"
 import "./compile.keal"
 import "./migrate.keal"
+import "./plkeal.keal"
 
 func usage(): Nothing {
     println("usage: kealsql <file.kealsql>")
     println("       kealsql --migrate <file.kealsql> [--db NAME] [--destructive]")
+    println("       kealsql --plkeal DIR <file.kealsql>")
+    println("       kealsql --lib PATH <file.kealsql>")
     exit(2)
 }
 
@@ -24,6 +30,8 @@ var path = ""
 var migrate = false
 var destructive = false
 var db = ""
+var plkealDir = ""
+var lib = ""
 val argv = args()
 var i = 0
 while (i < argv.size) {
@@ -35,6 +43,16 @@ while (i < argv.size) {
             i += 1
             if (i >= argv.size) { usage() }
             db = argv[i]
+        }
+        "--plkeal" -> {
+            i += 1
+            if (i >= argv.size) { usage() }
+            plkealDir = argv[i]
+        }
+        "--lib" -> {
+            i += 1
+            if (i >= argv.size) { usage() }
+            lib = argv[i]
         }
         else -> {
             if (a.startsWith("--") or path != "") { usage() }
@@ -53,7 +71,11 @@ if (source == null) {
 }
 val program = parseFile(path, source)
 val compiler = Compiler(path, program)
-if (migrate) {
+compiler.lib = lib
+if (plkealDir != "") {
+    compiler.resolveSchema()
+    for (w in writePlkeal(compiler, plkealDir)) { println(w) }
+} else if (migrate) {
     compiler.resolveSchema()
     print(Migration(compiler, readLive(db), destructive).run())
 } else {

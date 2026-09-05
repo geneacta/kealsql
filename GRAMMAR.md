@@ -33,6 +33,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `table` | before a name: `table User { … }` |
 | `primary` `slug` `unique` `cascade` `restrict` `setNull` | before a column name, inside a `table` |
 | `renamed` | `renamed(old)` before a column name, or before `table` |
+| `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
 
 **Nothing else is reserved.** `from`, `where`, `select`, `join`, `orderBy`,
 `insert`, `update`, `delete`, `set`, `like` are methods and functions, not
@@ -43,7 +44,7 @@ too. A column may be called `select` if its author insists.
 
 ```
 File          = Item* ;
-Item          = Import | EnumDecl | TableDecl | QueryDecl | MutationDecl ;
+Item          = Import | EnumDecl | TableDecl | QueryDecl | MutationDecl | StoredDecl ;
 
 Import        = "import" String ( "as" Ident )? ;
 EnumDecl      = "enum" Ident "{" Ident ( "," Ident )* ","? "}" ;
@@ -220,6 +221,21 @@ Naming a column that has no default and no `?` is an error, at compile time.
 | `update(Post).where(p).set(title = t)` | `UPDATE post SET title = $1 WHERE p` |
 | `delete(Post).where(p)` | `DELETE FROM post WHERE p` |
 
+### Stored functions
+
+```
+StoredDecl    = "stored" "pure"? "func" Ident "(" Params? ")" ":" ScalarType KealBody ;
+KealBody      = "{" ... "}" ;                              (* Keal, verbatim, to the matching brace *)
+```
+
+The signature is KealSql's — `Int`, `Float`, `Bool` or `String`, none
+optional, no `String(n)` — and the body is Keal's: the parser finds the
+matching brace and keeps the text for the Keal toolchain. `pure` declares
+the function `IMMUTABLE`; without it, `VOLATILE`. A stored function is
+called in expressions like any function, `slugify(name)`; its arguments
+are checked against the signature, and an optional argument makes the
+result optional — the function is STRICT, so a null never reaches it.
+
 ## 5. Expressions
 
 Keal's expression grammar, Keal's precedence — *tightest binding last*:
@@ -367,6 +383,9 @@ line above the statement it concerns, so the output stays loadable.
 kealsql file.kealsql                                   the SQL: schema, then one PREPARE per func / proc
 kealsql --migrate file.kealsql [--db NAME] [--destructive]
                                                        the migration from a live database to the file
+
+kealsql --plkeal DIR file.kealsql                      the stored functions as DIR/<stem>.keal and DIR/build.sh
+kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCTIONs naming that library
 ```
 
 `--migrate` reads the database through `psql` — `--db` is its `-d`; without
@@ -375,6 +394,12 @@ it the `PG*` environment and `~/.pgpass` decide — and prints `ALTER`,
 back as comments unless `--destructive`; `renamed(old)` is what makes a
 rename a rename rather than a drop and an add. [DESIGN.md](DESIGN.md) §3
 has the rules.
+
+`--plkeal` writes the Keal program and the build script for the shared
+library of a file's `stored func`s; `build.sh` needs `keal` (or `KEAL=`),
+a C compiler, and `pg_config` for the server headers. The file's SQL then
+loads with `--lib DIR/<stem>.so` (without it, `$libdir/<stem>`).
+[DESIGN.md](DESIGN.md) §1 has the mechanism.
 
 ## 8. Implementation notes
 

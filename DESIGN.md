@@ -39,10 +39,43 @@ run time.) The compiler can also *refuse* slow patterns — N+1, `like "%x"`
 without a trigram index, a join on an unindexed column — instead of letting
 them through.
 
-**Later, optionally: `plkeal`.** Keal compiles through C11 and has C interop.
-A stored procedure written in Keal can become a `LANGUAGE C` function — the
-fastest procedural language PostgreSQL has, against an interpreted PL/pgSQL.
-The issue to settle before this is attempted: PostgreSQL reports errors with
+**`plkeal` — shipped, for pure functions.** Keal compiles through C11 and
+has C interop, so a function written in Keal becomes a `LANGUAGE C`
+function — the fastest procedural language PostgreSQL has, against an
+interpreted PL/pgSQL:
+
+```
+stored pure func slugify(s: String): String { ...ordinary Keal... }
+
+func slugs(): List<(String, String)> {
+    from(User).select(name, slugify(name))       // typed, like any function
+}
+```
+
+`kealsql --plkeal DIR file.kealsql` writes a Keal program (the functions
+verbatim, a `try` guard around each, and a `native` block with one
+PostgreSQL entry point per function) and a `build.sh` that runs
+`keal emit-c` and the C compiler against the server headers. The file's
+ordinary SQL output carries the `CREATE FUNCTION ... LANGUAGE C STRICT`
+statements (`--lib` names the library; `pure` adds `IMMUTABLE`). Values
+cross as `KealStr*`, `int64_t`, `double`, `bool` — `Int`, `Float`, `Bool`,
+`String`, none optional: the functions are STRICT, so PostgreSQL answers
+null to a null without calling them. A panic inside (`throw`, overflow, a
+bad index) is caught by the guard *in Keal*, read by the entry point after
+every Keal frame has returned, and only then raised with `ereport` — which
+is the rule below, obeyed. The suite builds the library, loads it, runs
+the functions from prepared statements, and checks that a panic is a SQL
+error and the backend is still there afterwards.
+
+Not in this version: reaching the database from inside a stored function
+(SPI). That is the case where PostgreSQL would `longjmp` *through* Keal,
+and it waits for the shim discipline below to be applied to every SPI
+call. Two things the runtime needed, found by doing it: the program's
+`main` is what interns the string literals, so the entry points call
+`keal_init_literals()` from `_PG_init`; and a global must be right as C
+zeroes it (`var x: String? = null`), because that `main` never runs.
+
+The issue the SPI step must settle: PostgreSQL reports errors with
 `longjmp` (`ereport`) and allocates with `palloc`. Measured on the Keal side
 (keal `db49bf4`, `docs/interop.md`): the Keal runtime uses no `setjmp`, it
 unwinds by poisoned returns, so a foreign `longjmp` over Keal frames leaks
@@ -344,8 +377,9 @@ Mappings:
 
 * Spelling of the null-safe comparison operators (`===` / `!==` is a
   placeholder).
-* `plkeal`: the C shim discipline of §1, and whether `keal build` can
-  produce a `LANGUAGE C` function's entry point directly.
+* `plkeal` with SPI — database access from inside a stored function —
+  under the shim discipline of §1; and a runtime entry point for
+  initialisation that is not a `static` function called by name.
 * PostgreSQL trademark: "KealSql" is fine; "built on PostgreSQL" is the safe
   formula. PostgreSQL's licence (permissive, BSD-like) allows all of this;
   the copyright notice and permission paragraph must be kept.

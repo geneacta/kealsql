@@ -1,0 +1,52 @@
+// Stored functions: Keal that runs inside PostgreSQL.
+
+table User {
+    id:   Id
+    name: Slug
+}
+
+// A URL-safe form of a name: letters and digits, one dash between runs.
+stored pure func slugify(s: String): String {
+    var out = ""
+    var dash = false
+    for (c in s.toLower()) {
+        if ((c >= "a" and c <= "z") or (c >= "0" and c <= "9")) {
+            out += c
+            dash = false
+        } else if (not dash and out != "") {
+            out += "-"
+            dash = true
+        }
+    }
+    if (out.endsWith("-")) { out = out.take(out.length - 1) }
+    return out
+}
+
+stored pure func fib(n: Int): Int {
+    if (n < 2) { return n }
+    var a = 0
+    var b = 1
+    var i = 2
+    while (i <= n) {
+        val t = a + b
+        a = b
+        b = t
+        i += 1
+    }
+    return b
+}
+
+stored pure func isLong(s: String, min: Int): Bool { s.length > min }
+
+stored pure func halve(x: Float): Float { x / 2.0 }
+
+// A panic inside a stored function is a SQL error, not a dead backend.
+stored func shout(s: String): String { throw "no shouting: " + s }
+
+func slugs(): List<(String, String)> {
+    from(User).orderBy(name).select(name, slugify(name))
+}
+
+func longNames(min: Int): List<String> {
+    from(User).where(isLong(name, min)).orderBy(name).select(name)
+}

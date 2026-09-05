@@ -60,6 +60,16 @@ package class FunN(package val name: String, package val isFunc: Bool, package v
 
 package class ArgN(package val name: String, package val value: Ex)   // name "" when positional
 
+/// `stored func`: a function that runs inside PostgreSQL, written in Keal.
+/// `body` is the source between its braces, verbatim, handed to the Keal
+/// toolchain; KealSql only reads the signature.
+package class StoredN(package val name: String, package val line: Int, package val col: Int) {
+    package var params: List<ParamN> = []
+    package var ret: TypeN? = null
+    package var pure: Bool = false           // IMMUTABLE for the planner
+    package var body: String = ""
+}
+
 /// A `when` arm: `values -> body`, or `else -> body`.
 package class ArmN(package val line: Int, package val col: Int) {
     package var isElse: Bool = false
@@ -88,4 +98,5 @@ package class ProgramN() {
     package var enums: List<EnumN> = []
     package var tables: List<TableN> = []
     package var funs: List<FunN> = []
+    package var stored: List<StoredN> = []
 }

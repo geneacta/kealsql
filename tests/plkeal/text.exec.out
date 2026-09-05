@@ -1,0 +1,22 @@
+name|slugify
+  42  |42
+Hello World|hello-world
+Keal & SQL!!|keal-sql
+(3 rows)
+name
+Hello World
+Keal & SQL!!
+(2 rows)
+fib
+12586269025
+(1 row)
+halve
+2.5
+(1 row)
+strict_null
+t
+(1 row)
+psql:tests/plkeal/text.exec.sql:9: ERROR:  no shouting: x
+after_error
+still alive
+(1 row)

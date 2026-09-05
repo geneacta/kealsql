@@ -74,6 +74,8 @@ KealSql needs the Keal toolchain on the path, or beside the repository at
 keal src/main.keal file.kealsql                          # print the SQL
 keal src/main.keal --migrate file.kealsql --db mydb      # the migration from a live database to the file
 keal src/main.keal --migrate file.kealsql --db mydb --destructive
+keal src/main.keal --plkeal build/ file.kealsql          # the stored functions as a Keal program + build.sh
+keal src/main.keal --lib build/file.so file.kealsql      # the SQL, CREATE FUNCTION naming that library
 tests/run.sh                                              # the suite: every case, byte for byte
 ```
 
@@ -85,13 +87,33 @@ what it would cost, until `--destructive`. A rename is written where it
 happens, `renamed(bio) about: String?` or `renamed(Post) table Article`,
 because a diff cannot tell a rename from a drop and an add.
 
+A `stored func` is Keal that runs **inside** PostgreSQL, as a
+`LANGUAGE C` function — the fastest procedural language the server has:
+
+```
+stored pure func slugify(s: String): String { ...ordinary Keal... }
+
+func slugs(): List<(String, String)> {
+    from(User).select(name, slugify(name))
+}
+```
+
+`--plkeal` writes the Keal program and a `build.sh` (Keal to C, then the C
+compiler against the server headers); the file's SQL carries the
+`CREATE FUNCTION`s. A panic inside becomes a SQL error, and the backend
+lives on. Values are `Int`, `Float`, `Bool`, `String`; the functions are
+STRICT, so a null answers null without a call. Not yet: reaching the
+database from inside one.
+
 When PostgreSQL's `initdb` is on the machine, the suite also starts a
 private server in a temporary directory — no root, no configuration — loads
 every case's SQL into a fresh database, runs the `*.exec.sql` beside it in
 the same session, and compares the rows to `*.exec.out`; each
 `tests/migrations/*/` is built from `before.kealsql`, migrated to
 `after.kealsql`, applied in one transaction, and diffed again until it
-settles. Without `initdb` it says so and compares the SQL only.
+settles; each `tests/plkeal/*.kealsql` has its library built (server
+headers and a C compiler needed) and loaded, and its functions run.
+Without `initdb` it says so and compares the SQL only.
 
 The compiler runs on Keal's bytecode VM. `keal build` refuses it for now —
 its error path returns `Nothing`, which the C backend does not cover yet —
@@ -108,11 +130,13 @@ and says so by name rather than mis-compiling, which is Keal's rule.
 | `src/compile.keal` | checker and emitter, one pass: a `Val` is an expression's SQL and its type |
 | `src/catalog.keal` | the live schema, read from `pg_catalog` through `psql` |
 | `src/migrate.keal` | the diff: declared against live, as statements to review |
+| `src/plkeal.keal` | the stored functions as a Keal program with PostgreSQL entry points, and its build script |
 | `src/main.keal` | the command |
 | `tests/cases/*.kealsql` | each compiles to exactly its `.sql` |
 | `tests/errors/*.kealsql` | each fails with exactly its `.err` |
 | `tests/cases/*.exec.sql` | run on PostgreSQL after the case's SQL; the rows must be exactly `.exec.out` |
 | `tests/migrations/*/` | `before.kealsql` → `after.kealsql` must print `expected.sql`, apply, then settle to `settled.sql` |
+| `tests/plkeal/*.kealsql` | compiled to `.sql`; the library is built, loaded, and `.exec.sql` must print `.exec.out` |
 
 ## Status
 
@@ -122,8 +146,10 @@ DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 `select` / `count` / `exists` with `first` / `single`, subqueries through
 `val`-bound fragments and `in`, `insert` / `update` / `delete`, `when`,
 `?:`, the eight connectives with Kleene's tables on `Bool3`, and reference
-paths as implicit joins — and the migration diff against a live database,
-with renames declared and destructive steps held back. Not yet: `plkeal`,
-and native compilation (`Nothing` in Keal's C backend).
+paths as implicit joins; the migration diff against a live database, with
+renames declared and destructive steps held back; and `plkeal`, stored
+functions in Keal compiled to `LANGUAGE C`. Not yet: database access from
+inside a stored function (SPI), and native compilation of the compiler
+itself (`Nothing` in Keal's C backend).
 
 Licensed under Apache-2.0, like Keal.

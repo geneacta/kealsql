@@ -12,6 +12,7 @@
 # and said so.
 cd "$(dirname "$0")/.." || exit 2
 KEAL="${KEAL:-../keal/target/release/keal}"
+case "$KEAL" in */*) KEAL="$(cd "$(dirname "$KEAL")" && pwd)/$(basename "$KEAL")";; esac   # build.sh cd's away
 failed=0
 
 check() {
@@ -62,6 +63,34 @@ for f in tests/cases/*.sql; do
         fi
     else
         echo "ok   $f on PostgreSQL"
+    fi
+done
+
+# ---- stored functions: tests/plkeal/NAME.kealsql
+# NAME.sql is the compiled output (CREATE FUNCTION against $libdir); then the
+# library is generated, built against the server headers, loaded with --lib,
+# and NAME.exec.sql must print exactly NAME.exec.out.
+PGINC=$("$PGBIN/pg_config" --includedir-server 2>/dev/null)
+for f in tests/plkeal/*.kealsql; do
+    [ -f "$f" ] || continue
+    check "$f" "${f%.kealsql}.sql" 0
+    name=$(basename "${f%.kealsql}")
+    if [ ! -f "$PGINC/postgres.h" ] || ! command -v cc > /dev/null; then
+        echo "skip $f on PostgreSQL: server headers or a C compiler are missing"; continue
+    fi
+    out="$PGDIR/plkeal/$name"
+    if ! "$KEAL" src/main.keal --plkeal "$out" "$f" > /dev/null; then echo "FAIL $f: --plkeal"; failed=1; continue; fi
+    if ! KEAL="$KEAL" sh "$out/build.sh" > "$PGDIR/build.log" 2>&1; then
+        echo "FAIL $f: the library does not build"; grep -E "error" "$PGDIR/build.log" | head -5; failed=1; continue
+    fi
+    $PSQL -d postgres -c "CREATE DATABASE plk_$name" > /dev/null
+    "$KEAL" src/main.keal --lib "$out/$name.so" "$f" > "$out/$name.sql"
+    exp="${f%.kealsql}.exec.out"
+    result=$($PSQL -d "plk_$name" -f "$out/$name.sql" -f "${f%.kealsql}.exec.sql" 2>&1); code=$?
+    if [ "$code" != 0 ]; then echo "FAIL $f on PostgreSQL"; echo "$result" | head -10; failed=1; continue; fi
+    if [ -n "$UPDATE" ]; then printf '%s\n' "$result" > "$exp"; fi
+    if printf '%s\n' "$result" | diff -u "$exp" - > /dev/null 2>&1; then echo "ok   $f builds, loads, and $(basename "${f%.kealsql}.exec.sql") matches"
+    else echo "FAIL $exp"; printf '%s\n' "$result" | diff -u "$exp" - | head -20; failed=1
     fi
 done
 
