@@ -215,22 +215,16 @@ package func plkealSource(compiler: Compiler): String {
 /// `PostsRow` for the query `posts`.
 func rowRecord(q: QueryInfo): String { q.name.take(1).toUpper() + q.name.drop(1) + "Row" }
 
-/// A record with an explicit toString: the C backend mis-compiles the one it
-/// would synthesise for a record with an `Int?`, `Float?` or `Bool?` field
-/// (reported to Keal); a written one is emitted as written.
+/// A row as a record. Keal's own toString serves (since keal 9709d1b, which
+/// fixed it for optional value fields).
 func recordDecl(name: String, fields: List<String>, types: List<String>): String {
     val decl: List<String> = []
-    val shown: List<String> = []
     var i = 0
     while (i < fields.size) {
         decl.add("val ${fields[i]}: ${types[i]}")
-        shown.add("${fields[i]}=$" + "{this.${fields[i]}}")
         i += 1
     }
-    var out = "record ${name}(${decl.join(", ")}) {\n"
-    out += "    func toString(): String { \"${name}(${shown.join(", ")})\" }\n"
-    out += "}\n"
-    return out
+    return "record ${name}(${decl.join(", ")})\n"
 }
 
 /// The Keal function a stored function calls to run one of the file's queries.

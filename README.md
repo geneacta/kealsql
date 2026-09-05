@@ -67,9 +67,10 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least `f4e6856` (after 1.2.0): `runCommand` with a standard
-input, which `--migrate` uses to talk to `psql`, and `keal_runtime_init`,
-which a stored function's library calls when PostgreSQL loads it.
+`../keal` — at least `9709d1b` (after 1.2.0): `runCommand` with a standard
+input, which `--migrate` uses to talk to `psql`; `keal_runtime_init`,
+which a stored function's library calls when PostgreSQL loads it; and
+records with optional value fields compiling natively.
 
 ```sh
 keal src/main.keal file.kealsql                          # print the SQL

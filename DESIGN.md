@@ -103,9 +103,9 @@ Two things the runtime needed, found by doing it: the program's `main` is
 what sets the runtime up, so the entry points call `keal_runtime_init()`
 (added to Keal for this) from `_PG_init`; and a global must be right as C
 zeroes it (`var x: String? = null`), because that `main` never runs. And
-one backend bug worked around: the synthesised `toString` of a record
-with an `Int?` field does not compile natively, so the generated records
-write their own.
+one backend bug found by a generated record with an `Int?` field, whose
+synthesised `toString` did not compile natively — fixed in Keal the same
+day (`9709d1b`), which is why KealSql wants that commit or later.
 
 The rule that shaped the design: PostgreSQL reports errors with
 `longjmp` (`ereport`) and allocates with `palloc`. Measured on the Keal side
