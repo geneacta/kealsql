@@ -418,6 +418,16 @@ Mappings:
 | `T?` column                       | nullable column                       |
 | `enum`                            | `CREATE TYPE … AS ENUM`               |
 
+### The escape hatch
+
+No language covers the long tail of PostgreSQL, and one that tried would
+be SQL with parentheses. jOOQ, Kysely and EdgeDB all ended up with a typed
+raw query; KealSql has one from the start: `sql("...")` as the body of a
+`func` or `proc`, the parameters `$1`.. in order, the declared result type
+trusted. The compiler checks nothing inside the string — the suite does,
+by running it. It is the guarantee that the long tail never blocks a
+user, and the reason the language can stay small.
+
 ## 5. Open questions
 
 * `plkeal`: cells cross as text and are parsed on the Keal side; a binary

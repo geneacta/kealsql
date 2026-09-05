@@ -165,11 +165,14 @@ Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
 v1 covers the schema (`table`, `enum`, keys, references, `on delete`,
 defaults, named checks, indexes, arrays, `Decimal`, `Timestamptz`, `Json`
 and the other common types), the DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
-`orderBy` / `groupBy` / `distinct` / `limit` / `offset`, the terminals
-`select` / `count` / `exists` with `first` / `single`, subqueries through
-`val`-bound fragments and `in`, `insert` / `update` / `delete`, `when`,
-`?:`, the eight connectives with Kleene's tables on `Bool3`, and reference
-paths as implicit joins; the migration diff against a live database, with
+`orderBy` / `groupBy` / `distinct` / `limit` / `offset`, `fullJoin` /
+`crossJoin`, `union` / `intersect` / `except`, the terminals `select` /
+`count` / `exists` with `first` / `single`, subqueries through `val`-bound
+fragments and `in`, window functions, text, date and cast functions, the
+aggregates, `insert` of several rows with `onConflict`, `update` /
+`delete`, `sql("...")` as the typed escape hatch, `when`, `?:`, the eight
+connectives with Kleene's tables on `Bool3`, and reference paths as
+implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
 functions in Keal compiled to `LANGUAGE C`, calling the file's queries
 through SPI with typed results — all of it compiled natively as well as

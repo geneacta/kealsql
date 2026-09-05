@@ -179,6 +179,8 @@ Stage         = "where"    "(" Expr ")"
               | "unless"   "(" Expr ")"
               | "join"     "(" Ident ( "as" Ident )? "," Expr ")"
               | "leftJoin" "(" Ident ( "as" Ident )? "," Expr ")"
+              | "fullJoin" "(" Ident ( "as" Ident )? "," Expr ")"   (* every column in scope becomes optional *)
+              | "crossJoin" "(" Ident ( "as" Ident )? ")"
               | "orderBy"  "(" OrderKey ( "," OrderKey )* ")"
               | "groupBy"  "(" Expr ( "," Expr )* ")"
               | "distinct" "(" ")"
@@ -190,11 +192,15 @@ Terminal      = "select" "(" ( "*" | Expr ( "," Expr )* ) ")"
               | "count"  "(" ")"
               | "exists" "(" ")" ;
 Fetch         = "first" "(" ")"                            (* LIMIT 1, type T? *)
-              | "single" "(" ")" ;                         (* exactly one, type T *)
+              | "single" "(" ")"                           (* exactly one, type T *)
+              | SetOp "(" Pipeline ")" ;                   (* after select: another select, same columns *)
+SetOp         = "union" | "unionAll" | "intersect" | "except" ;
 
-Mutation      = "insert" "(" Ident "(" NamedArgs ")" ")"
+Mutation      = "insert" "(" Row ( "," Row )* ")" ( "." "onConflict" "(" Ident ( "," Ident )* ")" "." ( "ignore" "(" ")" | "update" "(" NamedArgs ")" ) )?
               | "update" "(" Ident ")" ( "." "where" "(" Expr ")" )* "." "set" "(" NamedArgs ")"
-              | "delete" "(" Ident ")" ( "." "where" "(" Expr ")" )* ;
+              | "delete" "(" Ident ")" ( "." "where" "(" Expr ")" )*
+              | "sql" "(" String ")" ;                     (* the escape hatch: SQL as written *)
+Row           = Ident "(" NamedArgs ")" ;
 NamedArgs     = Ident "=" Expr ( "," Ident "=" Expr )* ;
 ```
 
@@ -207,7 +213,17 @@ the final pipeline it is inlined.
 
 `insert(Post(title = t, author = a))` is Keal's named-argument constructor
 call. Columns not named take their SQL default; an `Id` never needs naming.
-Naming a column that has no default and no `?` is an error, at compile time.
+Omitting a column that has no default and no `?` is an error, at compile
+time. Several rows name the same columns. `onConflict(cols)` names a key
+the table has — a unique column or a `unique(a, b)` — and `ignore()` or
+`update(col = expr)` says what happens; in the update, `excluded.col` is
+the row that was not inserted and `Table.col` the one that is there.
+
+`sql("...")` is the escape hatch for what the language does not say:
+the statement as written, `$1`.. the parameters in order, the declared
+result trusted — the suite runs it against PostgreSQL, the compiler
+cannot check it. Only what PostgreSQL prepares is accepted: SELECT,
+INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 
 ### What it compiles to
 
@@ -219,6 +235,12 @@ Naming a column that has no default and no `?` is an error, at compile time.
 | `.unless(p)` | `WHERE NOT (p)` |
 | `.join(User as u, p.author == u.id)` | `JOIN user AS u ON p.author = u.id` |
 | `.leftJoin(…)` | `LEFT JOIN … ON …` |
+| `.fullJoin(…)` / `.crossJoin(T)` | `FULL JOIN … ON …` / `CROSS JOIN …` |
+| `.select(…).union(q)` | `… UNION (SELECT …)`; also `unionAll`, `intersect`, `except`; the columns must agree in number and type |
+| `insert(R(…), R(…))` | `VALUES (…), (…)` |
+| `insert(R(…)).onConflict(k).update(a = excluded.a)` | `ON CONFLICT (k) DO UPDATE SET a = EXCLUDED.a` |
+| `insert(R(…)).onConflict(k).ignore()` | `ON CONFLICT (k) DO NOTHING` |
+| `sql("SELECT …")` | as written |
 | `.orderBy(created.desc.nullsLast)` | `ORDER BY created DESC NULLS LAST` |
 | `.groupBy(author)` | `GROUP BY author` |
 | `.distinct()` | `SELECT DISTINCT` |
@@ -316,6 +338,13 @@ left join, and the type of the result says which happened.
 | `now()`, `today()`, `uuid()` | `Timestamptz`, `Date`, `Uuid` |
 | `+ - * / %` with a `Decimal` | `Decimal` |
 | `count(*)`, `count(c)`, `sum(c)`, `avg(c)`, `min(c)`, `max(c)` | aggregates; `sum`/`avg`/`min`/`max` of an empty group are `T?` |
+| `countDistinct(c)`, `stringAgg(s, sep[, key])`, `arrayAgg(c[, key])`, `boolAnd(b)`, `boolOr(b)` | aggregates; the key orders what is joined, and without one the database picks |
+| `rowNumber()`, `rank()`, `denseRank()`, `lag(x)`, `lead(x)`, or an aggregate, then `.over(partition(cols), order(keys))` | a window: `… OVER (PARTITION BY … ORDER BY …)`; `lag`/`lead` answer `T?` |
+| `s.replace(a, b)`, `s.substring(from, count)`, `s.position(sub)`, `s.split(sep)`, `s.padStart(n, c)`, `s.padEnd(n, c)` | text; `substring` and `position` count from 1, as SQL does |
+| `s.matches(re)`, `s.imatches(re)` | `Bool` / `Bool3` (`~`, `~*`) |
+| `x.toString()`, `s.toInt()`, `s.toFloat()`, `s.toDecimal()` | `CAST` |
+| `t.year()`, `month()`, `day()`, `hour()`, `minute()`; `t.date()`; `t.plusDays(n)`, `plusHours(n)`, `plusMinutes(n)` | `EXTRACT`, a cast to `date`, `+ make_interval`; a `Date` plus days stays a `Date` |
+| `x?.f()` | the same as `x.f()`: SQL's functions answer null to null; `?.` on a value that is never null is refused |
 | `a <==> b` | `Bool`, "does the order separate them" — an `Ord` question, kept for symmetry with Keal; rarely useful in SQL |
 
 `where(p)` and `unless(p)` accept `Bool` or `Bool3`. On `Bool3` the emitted
