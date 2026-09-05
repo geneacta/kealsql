@@ -312,7 +312,7 @@ left join, and the type of the result says which happened.
 | `s.like(p)`, `s.ilike(p)` | `Bool` / `Bool3` (`LIKE` / `ILIKE`) |
 | `s.lower()`, `s.upper()`, `s.length()`, `s.trim()` | `String` / `Int`, `?`-preserving |
 | `["a", "b"]` | `String[]` (`ARRAY['a', 'b']`); an empty `[]` takes the type of the column or parameter it is given to |
-| `xs.size()`, `xs.has(v)` on an array | `Int` (`cardinality`), `Bool` / `Bool3` (`v = ANY(xs)`) |
+| `xs.size`, `xs.has(v)` on an array | `Int` (`cardinality`), `Bool` / `Bool3` (`v = ANY(xs)`) |
 | `now()`, `today()`, `uuid()` | `Timestamptz`, `Date`, `Uuid` |
 | `+ - * / %` with a `Decimal` | `Decimal` |
 | `count(*)`, `count(c)`, `sum(c)`, `avg(c)`, `min(c)`, `max(c)` | aggregates; `sum`/`avg`/`min`/`max` of an empty group are `T?` |

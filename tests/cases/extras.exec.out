@@ -1,18 +1,24 @@
-id|name|price|tags|kinds|created|active|stock|meta|ip|at|span|key
-1|first|5.00|{x}||2026-09-05 22:09:08.192598+02|t|0|||||accb060c-1fd1-41cd-99cf-cd368c691d87
-(1 row)
 name|price
 first|5.00
 second|12.50
 (2 rows)
+name
+first
+(1 row)
+name
+second
+(1 row)
+count
+1
+(1 row)
 name|ntags|has_b|kinds|active|keyed
 first|1|f||t|t
 second|2|t|{A}|t|t
 (2 rows)
-psql:tests/cases/extras.exec.sql:7: ERROR:  new row for relation "item" violates check constraint "item_in_stock_check"
-DETAIL:  Failing row contains (3, bad, 0.00, {}, null, 2026-09-05 22:09:08.19346+02, t, -1, null, null, null, null, abe34b2c-2038-43fa-9861-0626567e0bd6).
-psql:tests/cases/extras.exec.sql:8: ERROR:  new row for relation "item" violates check constraint "item_priced_check"
-DETAIL:  Failing row contains (2, second, 0.00, {a,b}, {A}, 2026-09-05 22:09:08.192993+02, t, 3, null, null, null, null, 014f3844-c238-47a0-b3c9-0e482322a870).
+psql:tests/cases/extras.exec.sql:10: ERROR:  new row for relation "item" violates check constraint "item_in_stock_check"
+DETAIL:  Failing row contains (3, bad, 0.00, {}, null, 2026-09-05 22:11:02.0513+02, t, -1, null, null, null, null, ec32582c-6ef7-4ea8-890a-28b740a785e1).
+psql:tests/cases/extras.exec.sql:11: ERROR:  new row for relation "item" violates check constraint "item_priced_check"
+DETAIL:  Failing row contains (2, second, 0.00, {a,b}, {A}, 2026-09-05 22:11:02.050107+02, t, 3, null, null, null, null, ec672d70-c939-48e7-9fb3-6af7794ee1f5).
 after_error
 still alive
 (1 row)

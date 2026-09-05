@@ -26,8 +26,27 @@ SELECT item.name, item.price
 FROM item
 WHERE item.price <= $1 AND item.active;
 
--- func add(name: String): Item
+-- proc add(name: String)
 PREPARE add(text) AS
 INSERT INTO item (name, price, tags)
-VALUES ($1, 5, ARRAY['x'])
-RETURNING *;
+VALUES ($1, 5, ARRAY['x']);
+
+-- func noKinds(): List<String>
+PREPARE no_kinds AS
+SELECT item.name
+FROM item
+WHERE item.kinds IS NULL
+ORDER BY item.name;
+
+-- func tagged(tag: String): List<String>
+PREPARE tagged(text) AS
+SELECT item.name
+FROM item
+WHERE $1 = ANY(item.tags)
+ORDER BY item.name;
+
+-- func stocked(): Int
+PREPARE stocked AS
+SELECT count(*)
+FROM item
+WHERE item.stock > 0 AND cardinality(item.tags) > 1;

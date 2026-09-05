@@ -1020,6 +1020,10 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             }
         }
         val base = this.emit(recv, plan)
+        if (base.ty.name.endsWith("[]") and e.text == "size" and not e.safe) {
+            // `.size` of an array, a property as Keal spells it.
+            return Val("cardinality(${base.sql})", Ty("Int", base.ty.optional))
+        }
         val col = base.col
         val src = base.src
         val why = "`.${e.text}` needs a reference on its left; `${base.sql}` is a `${this.renderTy(base.ty)}`"
