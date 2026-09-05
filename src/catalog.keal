@@ -26,7 +26,12 @@ package class LiveTable(package val name: String) {
     package func column(name: String): LiveColumn? { this.columns.find({ it.name == name }) }
 }
 
+/// A view, by name, with the fingerprint KealSql left as its comment ("" when
+/// it was not KealSql that made it).
+package class LiveView(package val name: String, package val fingerprint: String)
+
 package class Live() {
+    package var views: List<LiveView> = []
     package var enums: Map<String, List<String>> = {}
     package var enumOrder: List<String> = []
     package var tables: Map<String, LiveTable> = {}
@@ -58,6 +63,10 @@ SELECT 'K', c.relname, k.contype, k.conname,
 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
 WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'public'::regnamespace
 ORDER BY c.relname, k.conname;
+SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), '')
+FROM pg_class c
+WHERE c.relkind = 'v' AND c.relnamespace = 'public'::regnamespace
+ORDER BY c.relname;
 SELECT 'I', c.relname, i.relname,
        (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
@@ -128,6 +137,7 @@ package func parseLive(text: String): Live {
                 val t = live.tables[f[1]]
                 if (t != null) { t.indexes.add(LiveIndex(f[2], f[3].split(","))) }
             }
+            "V" -> { live.views.add(LiveView(f[1], f[2])) }
             else -> {}
         }
     }

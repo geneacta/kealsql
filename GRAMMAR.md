@@ -34,6 +34,8 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `primary` `slug` `unique` `cascade` `restrict` `setNull` | before a column name, inside a `table` |
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
+| `view` | before a name: `view Name { pipeline }` |
+| `as` | `Table as t` in `from` / `join`; `expr as name` in `select` |
 
 **Nothing else is reserved.** `from`, `where`, `select`, `join`, `orderBy`,
 `insert`, `update`, `delete`, `set`, `like` are methods and functions, not
@@ -44,7 +46,8 @@ too. A column may be called `select` if its author insists.
 
 ```
 File          = Item* ;
-Item          = Import | EnumDecl | TableDecl | QueryDecl | MutationDecl | StoredDecl ;
+Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl ;
+ViewDecl      = "view" Ident "{" Pipeline "}" ;          (* ends in select, names its columns *)
 
 Import        = "import" String ( "as" Ident )? ;
 EnumDecl      = "enum" Ident "{" Ident ( "," Ident )* ","? "}" ;
@@ -153,7 +156,7 @@ RowType       = Ident                           (* a table: select(*) *)
               | Type ;                          (* one column: select(a) *)
 
 Block         = "{" Binding* Pipeline "}" ;
-Binding       = "val" Ident "=" Fragment ;
+Binding       = "val" Ident "=" ( Fragment | "recursive" "(" Pipeline "," Pipeline ")" ) ;
 ```
 
 Keal's `func` / `proc` split does the work here. A `func` must produce a
@@ -197,9 +200,11 @@ Fetch         = "first" "(" ")"                            (* LIMIT 1, type T? *
 SetOp         = "union" | "unionAll" | "intersect" | "except" ;
 
 Mutation      = "insert" "(" Row ( "," Row )* ")" ( "." "onConflict" "(" Ident ( "," Ident )* ")" "." ( "ignore" "(" ")" | "update" "(" NamedArgs ")" ) )?
-              | "update" "(" Ident ")" ( "." "where" "(" Expr ")" )* "." "set" "(" NamedArgs ")"
-              | "delete" "(" Ident ")" ( "." "where" "(" Expr ")" )*
+              | "insertInto" "(" Ident "," Pipeline ")"   (* the query's columns, by name, into the table *)
+              | "update" "(" Source ")" ( "." ( "join" "(" Source "," Expr ")" | "where" "(" Expr ")" ) )* "." "set" "(" NamedArgs ")"
+              | "delete" "(" Source ")" ( "." ( "join" "(" Source "," Expr ")" | "where" "(" Expr ")" ) )*
               | "sql" "(" String ")" ;                     (* the escape hatch: SQL as written *)
+Source        = Ident ( "as" Ident )? ;
 Row           = Ident "(" NamedArgs ")" ;
 NamedArgs     = Ident "=" Expr ( "," Ident "=" Expr )* ;
 ```
@@ -218,6 +223,16 @@ time. Several rows name the same columns. `onConflict(cols)` names a key
 the table has — a unique column or a `unique(a, b)` — and `ignore()` or
 `update(col = expr)` says what happens; in the update, `excluded.col` is
 the row that was not inserted and `Table.col` the one that is there.
+
+A `view` is a pipeline with a name: its `select` names its columns (`as`
+where an expression has no name of its own), and it is a source like a
+table — one without keys, that no reference may point at. `recursive(base,
+step)` bound with `val` is a recursive common table expression: the base
+select names and types the columns, the step names the binding as a source
+and selects the same columns, and the pipeline that follows reads it as a
+table. `insertInto(T, query)` takes the query's columns, by name, into
+`T`. `update` and `delete` may `join` a table: `UPDATE ... FROM` and
+`DELETE ... USING`, the join's condition in the `WHERE`.
 
 `sql("...")` is the escape hatch for what the language does not say:
 the statement as written, `$1`.. the parameters in order, the declared
@@ -241,6 +256,12 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 | `insert(R(…)).onConflict(k).update(a = excluded.a)` | `ON CONFLICT (k) DO UPDATE SET a = EXCLUDED.a` |
 | `insert(R(…)).onConflict(k).ignore()` | `ON CONFLICT (k) DO NOTHING` |
 | `sql("SELECT …")` | as written |
+| `view V { … }` | `CREATE VIEW v AS SELECT …; COMMENT ON VIEW v IS 'kealsql:<fingerprint>'` |
+| `val t = recursive(base, step)` | `WITH RECURSIVE t(cols) AS (base UNION ALL step)` before the statement |
+| `insertInto(T, q)` | `INSERT INTO t (cols) SELECT …` |
+| `update(P as p).join(U as u, c).where(w).set(…)` | `UPDATE p SET … FROM u WHERE c AND w` |
+| `delete(P as p).join(U as u, c).where(w)` | `DELETE FROM p USING u WHERE c AND w` |
+| `select(expr as name)` | `expr AS name` |
 | `.orderBy(created.desc.nullsLast)` | `ORDER BY created DESC NULLS LAST` |
 | `.groupBy(author)` | `GROUP BY author` |
 | `.distinct()` | `SELECT DISTINCT` |
@@ -345,6 +366,9 @@ left join, and the type of the result says which happened.
 | `x.toString()`, `s.toInt()`, `s.toFloat()`, `s.toDecimal()` | `CAST` |
 | `t.year()`, `month()`, `day()`, `hour()`, `minute()`; `t.date()`; `t.plusDays(n)`, `plusHours(n)`, `plusMinutes(n)` | `EXTRACT`, a cast to `date`, `+ make_interval`; a `Date` plus days stays a `Date` |
 | `x?.f()` | the same as `x.f()`: SQL's functions answer null to null; `?.` on a value that is never null is refused |
+| `json("{…}")` | a `Jsonb` literal |
+| `j.get(key)`, `j.at(i)`, `j.text(key)`, `j.hasKey(key)`, `j.contains(json(…))` | `->`, `->`, `->>` (`String?`), `?`, `@>` on a `Json` / `Jsonb` |
+| a `Bool3` in a `select` | leaves the query as a `Bool?`: unknown is null in a row |
 | `a <==> b` | `Bool`, "does the order separate them" — an `Ord` question, kept for symmetry with Keal; rarely useful in SQL |
 
 `where(p)` and `unless(p)` accept `Bool` or `Bool3`. On `Bool3` the emitted

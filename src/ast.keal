@@ -86,11 +86,12 @@ package class ArmN(package val line: Int, package val col: Int) {
 }
 
 /// Expressions. kind is one of:
-///   int float str bool null unknown comp ident star alias
+///   int float str bool null unknown comp ident star alias named
 ///   unary binary logical elvis notnull
 ///   call field method list when
 /// `text` holds the literal, the name, or the operator; `safe` marks `?.`.
-/// `alias` is `Table as t` where a call expects one; `star` is a bare `*`.
+/// `alias` is `Table as t` where a call expects one; `star` is a bare `*`;
+/// `named` is `expr as name` — a column's name in a select (kids[0], text).
 package class Ex(package val kind: String, package val line: Int, package val col: Int) {
     package var text: String = ""
     package var iVal: Int = 0
@@ -101,7 +102,11 @@ package class Ex(package val kind: String, package val line: Int, package val co
     package var arms: List<ArmN> = []        // when
 }
 
+/// `view Name { pipeline }`: a query with a name in the database.
+package class ViewN(package val name: String, package val body: Ex, package val line: Int, package val col: Int)
+
 package class ProgramN() {
+    package var views: List<ViewN> = []
     package var imports: List<String> = []
     package var enums: List<EnumN> = []
     package var tables: List<TableN> = []

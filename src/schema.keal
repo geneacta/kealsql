@@ -37,6 +37,8 @@ package class Table(package val name: String, package val decl: TableN) {
     package var slug: Column? = null
     package var hasId: Bool = false          // declared with the `Id` shorthand
     package var hasSlug: Bool = false        // declared with the `Slug` shorthand
+    package var isView: Bool = false         // a `view`, or a recursive binding: columns, no keys
+    package var viewSql: String = ""         // the view's SELECT
 
     package func column(name: String): Column? { this.columns.find({ it.name == name }) }
 }
@@ -45,6 +47,7 @@ package class Schema() {
     package var enums: Map<String, EnumN> = {}
     package var tables: Map<String, Table> = {}
     package var tableOrder: List<String> = []
+    package var viewOrder: List<String> = []
 
     package func isEnum(name: String): Bool { this.enums.containsKey(name) }
     package func enumHas(enumName: String, value: String): Bool {

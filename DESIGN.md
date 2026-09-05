@@ -380,6 +380,11 @@ parentheses.
   A `NOT NULL` column with a default is added without ceremony: the
   database fills it. Widening `numeric(p, s)` to `numeric(q ≥ p, s)` is
   safe, like `varchar(n)` to `varchar(m ≥ n)` and `integer` to `bigint`.
+* Views carry a fingerprint of their SQL as their comment
+  (`COMMENT ON VIEW v IS 'kealsql:…'`), so the migration can tell a
+  changed view from an unchanged one without parsing what the catalog
+  prints back. A changed or foreign-made view is dropped and created
+  again — no rows live in a view, so it is not destructive.
 * The suite applies each test migration in one transaction and runs the
   diff again: it must then print nothing but the notes.
 * **Names.** A parameter shadows a column of the same name, as an inner

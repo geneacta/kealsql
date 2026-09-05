@@ -1,0 +1,75 @@
+// The third tranche: views, a recursive query, insertInto, update and
+// delete through a join, json.
+
+table Category {
+    id:     Id
+    slug:   Slug
+    title:  String
+    parent: RefId<Category>?
+}
+
+table Product {
+    id:       Id
+    sku:      Slug
+    category: RefId<Category>
+    price:    Decimal(10, 2)
+    meta:     Jsonb?
+}
+
+table Archive {
+    id:    Id
+    sku:   String
+    price: Decimal(10, 2)
+    note:  String = "archived"
+}
+
+view PricedCategory {
+    from(Product as p).groupBy(p.category).select(p.category as category, count(*) as products, max(p.price) as top)
+}
+
+view Roots {
+    from(Category).where(parent == null).select(id, slug, title)
+}
+
+func categoryStats(): List<(Int, Int, Decimal?)> {
+    from(PricedCategory as s).orderBy(s.category).select(s.category, s.products, s.top)
+}
+
+func rootSlugs(): List<String> {
+    from(Roots).orderBy(slug).select(slug)
+}
+
+// Every category under a root, with its depth.
+func descendants(root: String): List<(String, Int)> {
+    val tree = recursive(
+        from(Category).where(slug == root).select(id, slug, 0 as depth),
+        from(Category as c).join(tree as t, c.parent == t.id).select(c.id, c.slug, t.depth + 1 as depth)
+    )
+    from(tree).orderBy(depth, slug).select(slug, depth)
+}
+
+func archiveCheap(max: Decimal): Int {
+    from(Archive).where(price <= max).count()
+}
+
+proc archive(max: Decimal) {
+    insertInto(Archive, from(Product).where(price <= max).select(sku, price))
+}
+
+// A category's products get its title in their meta, through a join.
+proc tagWithCategory(category: String) {
+    update(Product as p).join(Category as c, c.id == p.category).where(c.slug == category)
+        .set(meta = json("{\"tagged\": true}"))
+}
+
+proc dropCategoryProducts(category: String) {
+    delete(Product as p).join(Category as c, c.id == p.category).where(c.slug == category)
+}
+
+func tagged(): List<(String, String?, Bool?)> {
+    from(Product).where(meta != null).orderBy(sku).select(sku, meta?.text("tagged"), meta?.hasKey("tagged"))
+}
+
+func withMeta(key: String): List<String> {
+    from(Product).where(meta?.hasKey(key)).orderBy(sku).select(sku)
+}

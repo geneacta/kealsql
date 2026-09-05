@@ -1,0 +1,38 @@
+category|products|top
+2|2|22.00
+4|1|89.00
+5|1|450.00
+(3 rows)
+slug
+garden
+tools
+(2 rows)
+slug|depth
+tools|0
+hand|1
+power|1
+drills|2
+(4 rows)
+slug|depth
+garden|0
+(1 row)
+count
+2
+(1 row)
+sku|price|note
+HAM|15.00|archived
+SAW|22.00|archived
+(2 rows)
+sku|?column?|?column?
+DRL||f
+HAM|true|t
+SAW|true|t
+(3 rows)
+sku
+DRL
+(1 row)
+sku
+HAM
+MOW
+SAW
+(3 rows)

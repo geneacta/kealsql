@@ -57,8 +57,8 @@ id|status|placed_at
 1|Paid|2026-04-01 10:00:00
 (1 row)
 status|coalesce
-Paid|11900
 Cart|45000
+Paid|11900
 (2 rows)
 email|coalesce
 ada@x|11900

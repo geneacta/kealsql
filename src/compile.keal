@@ -59,6 +59,7 @@ package class Plan() {
     package var terminal: String = ""        // select / count / exists
     package var fetch: String = ""           // first / single
     package var setOps: List<String> = []    // "UNION (...)" ... appended after the select
+    package var nameColumns: Bool = false    // emit `AS name` on every select item: a view, a CTE
     package var rowTable: String = ""        // select(*): the table
 }
 
@@ -66,6 +67,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     package var schema: Schema = Schema()
     package var lib: String = ""             // the plkeal library path for CREATE FUNCTION; "" for $libdir
     package var queries: List<QueryInfo> = []
+    var ctes: List<String> = []              // `WITH RECURSIVE name(cols) AS (...)` of the current function
+    var cteTables: Map<String, Table> = {}    // the recursive bindings, as sources
     var params: List<Param> = []
     var bindings: Map<String, Ex> = {}
     var current: String = ""                 // the func being compiled, for messages
@@ -94,7 +97,56 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         for (name in this.schema.tableOrder) { this.resolveColumns(this.schema.tables[name]!!) }
         for (name in this.schema.tableOrder) { this.resolveReferences(this.schema.tables[name]!!) }
         for (name in this.schema.tableOrder) { this.resolveTableRules(this.schema.tables[name]!!) }
+        for (v in this.program.views) { this.resolveView(v) }
         for (s in this.program.stored) { this.checkStored(s) }
+    }
+
+    /// A view is a query with a name: its columns are the select's, named
+    /// and typed, and it is a source like a table — one without keys.
+    proc resolveView(v: ViewN) {
+        if (this.schema.tables.containsKey(v.name) or this.schema.isEnum(v.name)) { this.fail(v.line, v.col, "`${v.name}` is already a table or an enum") }
+        this.params = []
+        this.bindings = {}
+        this.ctes = []
+        this.cteTables = {}
+        val plan = Plan()
+        plan.nameColumns = true
+        this.walkSelect(this.flatten(v.body), plan)
+        if (plan.terminal != "select") { this.fail(v.body.line, v.body.col, "a view ends in `select`") }
+        if (plan.fetch != "") { this.fail(v.body.line, v.body.col, "a view is every row; no `first()` or `single()`") }
+        if (plan.selectTys.size == 1 and plan.selectTys[0].name.startsWith("row:")) { this.fail(v.body.line, v.body.col, "a view names its columns; `select(*)` would take a table's") }
+        val t = this.syntheticTable(v.name, plan.selectNames, plan.selectTys, v.line, v.col)
+        t.isView = true
+        t.viewSql = this.renderSelect(plan)
+        this.schema.tables.set(v.name, t)
+        this.schema.viewOrder.add(v.name)
+    }
+
+    /// A table made of a select's columns: a view, or a recursive binding.
+    func syntheticTable(name: String, names: List<String>, tys: List<Ty>, line: Int, col: Int): Table {
+        val decl = TableN(name, line, col)
+        val t = Table(name, decl)
+        var i = 0
+        while (i < names.size) {
+            val ty = tys[i]
+            if (ty.name.startsWith("row:")) { this.fail(line, col, "`${name}`: column `${names[i]}` is a whole row; select its columns") }
+            val tn = TypeN(ty.name, line, col)
+            tn.optional = ty.optional
+            val c = Column(names[i], ColumnN(names[i], tn, line, col))
+            c.scalar = ty.name
+            c.optional = ty.optional
+            t.columns.add(c)
+            i += 1
+        }
+        return t
+    }
+
+    /// A short, stable fingerprint of a view's SQL, kept as its comment in
+    /// the database so a migration can tell whether the view changed.
+    package func fingerprint(s: String): String {
+        var h = 7
+        for (c in s) { h = (h * 31 + c.code()) % 1000000007 }
+        return "kealsql:" + h
     }
 
     /// Defaults, checks and indexes: expressions over the table's own columns.
@@ -283,6 +335,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             val c = col.decl
             val target = this.schema.tables[col.refTable]
             if (target == null) { this.fail(c.line, c.col, "`${col.refTable}` is not a table") }
+            if (target.isView) { this.fail(c.line, c.col, "`${col.refTable}` is a view; a reference points at a table") }
             when (c.ty.name) {
                 "RefId" -> {
                     unless (target.hasId) {
@@ -363,7 +416,13 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             for (ix in this.indexesOf(t)) { out += this.indexDdl(t, ix) + "\n" }
             out += "\n"
         }
+        for (name in this.schema.viewOrder) { out += this.viewDdl(this.schema.tables[name]!!) + "\n" }
         return out
+    }
+
+    package func viewDdl(v: Table): String {
+        val sql = v.viewSql.replace("\n", "\n    ")
+        return "CREATE VIEW ${sqlName(v.name)} AS\n    ${sql};\nCOMMENT ON VIEW ${sqlName(v.name)} IS '${this.fingerprint(v.viewSql)}';\n"
     }
 
     package func columnDdl(c: Column): String {
@@ -435,9 +494,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             this.params.add(Param(p.name, i, ty, this.sqlTypeOf(ty)))
             i += 1
         }
+        this.ctes = []
+        this.cteTables = {}
         for (b in f.bindings) {
-            if (this.bindings.containsKey(b.name) or this.params.any({ it.name == b.name })) { this.fail(b.line, b.col, "`${b.name}` is already bound") }
-            this.bindings.set(b.name, b.ex)
+            if (this.bindings.containsKey(b.name) or this.params.any({ it.name == b.name }) or this.cteTables.containsKey(b.name)) { this.fail(b.line, b.col, "`${b.name}` is already bound") }
+            if (b.ex.kind == "call" and b.ex.text == "recursive") { this.recursiveBinding(b) }
+            else { this.bindings.set(b.name, b.ex) }
         }
         val body = f.body!!
         val steps = this.flatten(body)
@@ -472,6 +534,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 info.kind = if (f.isFunc) { "row" } else { "none" }
                 info.rowTable = r[1]
             }
+            "insertInto" -> {
+                val r = this.compileInsertInto(root, steps, f.isFunc)
+                sql = r[0]; produced = r[1]
+                info.kind = if (f.isFunc) { "row" } else { "none" }
+                info.rowTable = r[1]
+            }
             "update", "delete" -> {
                 val r = this.compileMutation(root, steps, f.isFunc)
                 sql = r[0]; produced = r[1]
@@ -484,7 +552,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 this.walkSelect(steps, plan)
                 if (plan.terminal == "") { this.fail(body.line, body.col, "the query ends without `select`, `count` or `exists`") }
                 unless (f.isFunc) { this.fail(body.line, body.col, "a `proc` returns nothing; a query that answers something is a `func`") }
-                sql = this.renderSelect(plan)
+                sql = this.withCtes(this.renderSelect(plan))
                 produced = this.producedType(plan)
                 info.kind = when (plan.terminal) {
                     "count" -> "count"
@@ -533,6 +601,39 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             if (ty.name.startsWith("row:")) { info.rowTable = ty.name.drop(4); info.colTys.add(ty) }
             else { info.colTys.add(Ty(ty.name, ty.optional and info.kind != "first")); info.colNames.add("c0") }
         }
+    }
+
+    /// `val tree = recursive(base, step)`: a recursive common table expression.
+    /// The base select names and types the columns; the step may name
+    /// `tree` as a source and must select the same columns.
+    proc recursiveBinding(b: BindN) {
+        val e = b.ex
+        if (e.args.size != 2) { this.fail(e.line, e.col, "`recursive` takes the base query and the step: `recursive(from(...).select(...), from(...).join(${b.name} as t, ...).select(...))`") }
+        val base = Plan()
+        base.nameColumns = true
+        this.walkSelect(this.flatten(e.args[0].value), base)
+        if (base.terminal != "select" or base.fetch != "") { this.fail(e.args[0].value.line, e.args[0].value.col, "the base of `recursive` ends in `select`") }
+        val t = this.syntheticTable(b.name, base.selectNames, base.selectTys, b.line, b.col)
+        t.isView = true
+        this.cteTables.set(b.name, t)
+        val step = Plan()
+        step.nameColumns = true
+        this.walkSelect(this.flatten(e.args[1].value), step)
+        if (step.terminal != "select" or step.fetch != "") { this.fail(e.args[1].value.line, e.args[1].value.col, "the step of `recursive` ends in `select`") }
+        if (step.selectTys.size != base.selectTys.size) { this.fail(e.args[1].value.line, e.args[1].value.col, "the step selects ${step.selectTys.size} column${if (step.selectTys.size == 1) { "" } else { "s" }}; the base ${base.selectTys.size}") }
+        var k = 0
+        while (k < base.selectTys.size) {
+            unless (this.sameType(base.selectTys[k], step.selectTys[k])) { this.fail(e.args[1].value.line, e.args[1].value.col, "column ${k + 1} of the step is a `${this.renderTy(step.selectTys[k])}`; the base's is a `${this.renderTy(base.selectTys[k])}`") }
+            k += 1
+        }
+        val cols = base.selectNames.map({ sqlName(it) }).join(", ")
+        this.ctes.add("${sqlName(b.name)}(${cols}) AS (\n    ${this.renderSelect(base).replace("\n", "\n    ")}\n    UNION ALL\n    ${this.renderSelect(step).replace("\n", "\n    ")}\n)")
+    }
+
+    /// The statement with its `WITH RECURSIVE` prefix, if the function bound any.
+    func withCtes(sql: String): String {
+        if (this.ctes.isEmpty()) { return sql }
+        return "WITH RECURSIVE ${this.ctes.join(",\n")}\n${sql}"
     }
 
     /// The declared result type, rendered the way `producedType` renders.
@@ -592,7 +693,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         if (arg.kind == "alias") { tableName = arg.text; alias = arg.kids[0].text }
         else if (arg.kind == "ident") { tableName = arg.text; alias = arg.text }
         else { this.fail(arg.line, arg.col, "expected a table, or `Table as t`") }
-        val t = this.schema.tables[tableName]
+        val cte = this.cteTables[tableName]
+        val t = if (cte != null) { cte } else { this.schema.tables[tableName] }
         if (t == null) { this.fail(arg.line, arg.col, "`${tableName}` is not a table") }
         val s = Src(alias, t)
         s.sqlAlias = if (arg.kind == "alias") { sqlName(alias) } else { sqlName(tableName) }
@@ -711,13 +813,23 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                             plan.selects.add("${s.sqlAlias}.*")
                             plan.selectTys.add(Ty("row:${s.table.name}", false))
                         } else {
-                            val e = this.emit(a.value, plan)
-                            plan.selects.add(e.sql)
-                            plan.selectTys.add(e.ty)
-                            val v = a.value
-                            var name = if (v.kind == "ident" or v.kind == "field") { v.text } else { "c${plan.selectNames.size}" }
-                            if (plan.selectNames.contains(name)) { name = "${name}${plan.selectNames.size}" }
+                            var v = a.value
+                            var given = ""
+                            if (v.kind == "named") { given = v.text; v = v.kids[0] }
+                            else if (v.kind == "alias") { given = v.kids[0].text; v = Ex("ident", v.line, v.col); v.text = a.value.text }
+                            val e = this.emit(v, plan)
+                            // A `Bool3` leaving the query is a `Bool?`: unknown is null in a row.
+                            plan.selectTys.add(if (e.ty.name == "Bool3") { Ty("Bool", true) } else { e.ty })
+                            var name = given
+                            if (name == "") { name = if (v.kind == "ident" or v.kind == "field") { v.text } else { "c${plan.selectNames.size}" } }
+                            if (plan.selectNames.contains(name)) {
+                                if (given != "") { this.fail(a.value.line, a.value.col, "`${name}` names two columns of this select") }
+                                name = "${name}${plan.selectNames.size}"
+                            }
                             plan.selectNames.add(name)
+                            val natural = (v.kind == "ident" or v.kind == "field") and e.col != null and e.col!!.name == name
+                            if (given != "" or (plan.nameColumns and not natural)) { plan.selects.add("${e.sql} AS ${sqlName(name)}") }
+                            else { plan.selects.add(e.sql) }
                         }
                     }
                     if (plan.grouped) { this.checkGrouped(step, plan) }
@@ -981,6 +1093,37 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return [sql, t.name]
     }
 
+    /// `insertInto(Table, query)`: the query's columns, by name, into the table.
+    func compileInsertInto(root: Ex, steps: List<Ex>, returning: Bool): List<String> {
+        if (steps.size > 1) { this.fail(steps[1].line, steps[1].col, "nothing follows `insertInto(...)`") }
+        if (root.args.size != 2 or root.args[0].value.kind != "ident") { this.fail(root.line, root.col, "`insertInto` takes a table and a query: `insertInto(Table, from(...).select(a, b as c))`") }
+        val t = this.schema.tables[root.args[0].value.text]
+        if (t == null) { this.fail(root.line, root.col, "`${root.args[0].value.text}` is not a table") }
+        if (t.isView) { this.fail(root.line, root.col, "`${t.name}` is a view") }
+        val plan = Plan()
+        this.walkSelect(this.flatten(root.args[1].value), plan)
+        if (plan.terminal != "select") { this.fail(root.args[1].value.line, root.args[1].value.col, "the query of `insertInto` ends in `select`") }
+        if (plan.selectTys.size == 1 and plan.selectTys[0].name.startsWith("row:")) { this.fail(root.args[1].value.line, root.args[1].value.col, "select the columns to insert, by name; `*` would take a table's") }
+        val cols: List<String> = []
+        var k = 0
+        while (k < plan.selectNames.size) {
+            val name = plan.selectNames[k]
+            val c = t.column(name)
+            if (c == null) { this.fail(root.line, root.col, "`${t.name}` has no column `${name}`; name the selected column after one: `expr as column`") }
+            if (c.isSerial) { this.fail(root.line, root.col, "`${name}` is assigned by the database; do not select into it") }
+            val ty = plan.selectTys[k]
+            unless (this.sameType(ty, c.ty())) { this.fail(root.line, root.col, "`${name}` is `${this.renderTy(c.ty())}`, not `${this.renderTy(ty)}`") }
+            if (ty.optional and not c.optional) { this.fail(root.line, root.col, "`${name}` is `${this.renderTy(c.ty())}`; the selected value may be null") }
+            cols.add(sqlName(name))
+            k += 1
+        }
+        val missing = t.columns.filter({ not it.isSerial and not it.optional and it.default == "" and not plan.selectNames.contains(it.name) }).map({ it.name })
+        unless (missing.isEmpty()) { this.fail(root.line, root.col, "`${t.name}` needs `${missing.join("`, `")}`; select a value for each") }
+        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.join(", ")})\n${this.withCtes(this.renderSelect(plan))}"
+        if (returning) { sql += "\nRETURNING *" }
+        return [sql, t.name]
+    }
+
     proc checkAssignable(at: Ex, v: Val, c: Column) {
         if (v.isNull) {
             unless (c.optional) { this.fail(at.line, at.col, "`${c.name}` is `${c.decl.ty.render()}`; it cannot be null") }
@@ -994,14 +1137,26 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         val kind = root.text
         if (root.args.size != 1) { this.fail(root.line, root.col, "`${kind}` takes one table") }
         val s = this.sourceOf(root.args[0].value, false)
-        if (root.args[0].value.kind == "alias") { this.fail(root.line, root.col, "`${kind}` takes the table itself, without an alias") }
+        if (s.table.isView) { this.fail(root.line, root.col, "`${s.table.name}` is a view") }
         val plan = Plan()
         plan.sources.add(s)
         val sets: List<String> = []
+        val joined: List<String> = []           // FROM / USING sources
         var i = 1
         while (i < steps.size) {
             val step = steps[i]
             when (step.text) {
+                "join" -> {
+                    // `update(P as p).join(U as u, u.id == p.author)`: UPDATE ... FROM u WHERE u.id = p.author
+                    if (step.args.size != 2) { this.fail(step.line, step.col, "`join` takes a table and a condition") }
+                    val j = this.sourceOf(step.args[0].value, false)
+                    if (plan.sources.any({ it.alias == j.alias })) { this.fail(step.line, step.col, "`${j.alias}` is already in scope; give the join an alias") }
+                    plan.sources.add(j)
+                    val on = this.emit(step.args[1].value, plan)
+                    if (on.ty.name != "Bool" and on.ty.name != "Bool3") { this.fail(step.line, step.col, "a join condition is a `Bool`") }
+                    joined.add(this.fromClause(j))
+                    plan.wheres.add(on.sql)
+                }
                 "where", "unless" -> {
                     val v = this.oneArg(step, "a condition")
                     val e = this.emit(v, plan)
@@ -1027,13 +1182,14 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             }
             i += 1
         }
-        if (plan.sources.size > 1) { this.fail(root.line, root.col, "a `${kind}` cannot reach through a reference; compare the reference column itself") }
+        if (plan.sources.any({ it.implicit })) { this.fail(root.line, root.col, "a `${kind}` cannot reach through a reference; `join` the table, or compare the reference column itself") }
         if (kind == "update" and sets.isEmpty()) { this.fail(root.line, root.col, "an `update` ends with `set(column = value)`") }
         if (plan.wheres.isEmpty()) { this.fail(root.line, root.col, "`${kind}` without `where` touches every row; write `.where(true)` to mean that") }
+        val target = this.fromClause(s)
         var sql = if (kind == "update") {
-            "UPDATE ${sqlName(s.table.name)}\nSET ${sets.join(", ")}\nWHERE ${plan.wheres.join(" AND ")}"
+            "UPDATE ${target}\nSET ${sets.join(", ")}" + (if (joined.isEmpty()) { "" } else { "\nFROM ${joined.join(", ")}" }) + "\nWHERE ${plan.wheres.join(" AND ")}"
         } else {
-            "DELETE FROM ${sqlName(s.table.name)}\nWHERE ${plan.wheres.join(" AND ")}"
+            "DELETE FROM ${target}" + (if (joined.isEmpty()) { "" } else { "\nUSING ${joined.join(", ")}" }) + "\nWHERE ${plan.wheres.join(" AND ")}"
         }
         if (returning) { sql += "\nRETURNING *" }
         return [sql, s.table.name]
@@ -1325,7 +1481,26 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 }
                 return Val("${recv.sql} + make_interval(${unit} => ${args[0].sql})", Ty(recv.ty.name, opt))
             }
+            "get", "at", "text", "hasKey" -> {
+                val isJson = recv.ty.name == "Json" or recv.ty.name == "Jsonb"
+                unless (isJson) { this.fail(e.line, e.col, "`${e.text}` is asked of a `Json` or `Jsonb`, not a `${this.renderTy(recv.ty)}`") }
+                this.argCount(e, 1)
+                when (e.text) {
+                    "get" -> { this.needs(e, args[0], "String"); return Val("${recv.sql} -> ${args[0].sql}", Ty(recv.ty.name, true)) }
+                    "at" -> { this.needs(e, args[0], "Int"); return Val("${recv.sql} -> ${args[0].sql}", Ty(recv.ty.name, true)) }
+                    "text" -> { this.needs(e, args[0], "String"); return Val("${recv.sql} ->> ${args[0].sql}", Ty("String", true)) }
+                    else -> {
+                        this.needs(e, args[0], "String")
+                        if (recv.ty.name != "Jsonb") { this.fail(e.line, e.col, "`hasKey` needs a `Jsonb`") }
+                        return Val("${recv.sql} ? ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+                    }
+                }
+            }
             "startsWith", "endsWith", "contains" -> {
+                if (recv.ty.name == "Jsonb" and e.text == "contains") {
+                    this.argCount(e, 1); this.needs(e, args[0], "Jsonb")
+                    return Val("${recv.sql} @> ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+                }
                 this.needs(e, recv, "String")
                 this.argCount(e, 1)
                 this.needs(e, args[0], "String")
@@ -1414,6 +1589,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     func call(e: Ex, var plan: Plan): Val {
         when (e.text) {
             "now" -> { this.argCount(e, 0); return this.lit("now()", "Timestamptz") }
+            "json" -> {
+                // `json("{...}")`: a Jsonb literal.
+                this.argCount(e, 1)
+                if (e.args[0].value.kind != "str") { this.fail(e.line, e.col, "`json` takes a string literal") }
+                return this.lit("${this.quote(e.args[0].value.text)}::jsonb", "Jsonb")
+            }
             "today" -> { this.argCount(e, 0); return this.lit("CURRENT_DATE", "Date") }
             "uuid" -> { this.argCount(e, 0); return this.lit("gen_random_uuid()", "Uuid") }
             "count" -> {

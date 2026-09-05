@@ -1,0 +1,11 @@
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+}
+view Cheap {
+    from(Product).where(price < 10).select(sku, price)
+}
+view Dear {
+    from(Product).where(price >= 100).select(sku, price)
+}

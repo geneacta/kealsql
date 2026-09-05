@@ -1,0 +1,12 @@
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+    stock: Int = 0
+}
+view Cheap {
+    from(Product).where(price < 20).select(sku, price)
+}
+view Stocked {
+    from(Product).where(stock > 0).select(sku, stock)
+}

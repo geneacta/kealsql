@@ -168,9 +168,11 @@ and the other common types), the DDL, and queries: `from` / `where` / `unless` /
 `orderBy` / `groupBy` / `distinct` / `limit` / `offset`, `fullJoin` /
 `crossJoin`, `union` / `intersect` / `except`, the terminals `select` /
 `count` / `exists` with `first` / `single`, subqueries through `val`-bound
-fragments and `in`, window functions, text, date and cast functions, the
-aggregates, `insert` of several rows with `onConflict`, `update` /
-`delete`, `sql("...")` as the typed escape hatch, `when`, `?:`, the eight
+fragments and `in`, `view`s, `recursive` common table expressions, window
+functions, text, date, cast and json functions, the aggregates, `insert`
+of several rows with `onConflict`, `insertInto` from a query, `update` /
+`delete` through a `join`, `sql("...")` as the typed escape hatch, `when`,
+`?:`, the eight
 connectives with Kleene's tables on `Bool3`, and reference paths as
 implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored

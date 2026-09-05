@@ -170,8 +170,35 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
                 this.drop("DROP TABLE ${quoteIf(ln)};", "every row of `${ln}` is lost")
             }
         }
+        this.views()
         this.dropEnums()
         return this.render()
+    }
+
+    /// Views: by name, and by the fingerprint of their SQL kept as a comment.
+    /// A changed or foreign-made view is dropped and created again — no rows
+    /// live in a view, so it is not destructive; a dropped one is a note.
+    proc views() {
+        val schema = this.schema()
+        val declared = schema.viewOrder.map({ snakeName(it) })
+        val changed: List<String> = []
+        for (name in schema.viewOrder) {
+            val v = schema.tables[name]!!
+            val vn = snakeName(name)
+            val live = this.live.views.find({ it.name == vn })
+            if (live == null) { changed.add(name); continue }
+            if (live.fingerprint != this.compiler.fingerprint(v.viewSql)) {
+                if (live.fingerprint == "") { this.note("view `${vn}` was not made by KealSql; it is replaced") }
+                this.add("DROP VIEW ${quoteIf(vn)};")
+                changed.add(name)
+            }
+        }
+        for (lv in this.live.views) {
+            unless (declared.contains(lv.name)) { this.add("DROP VIEW ${quoteIf(lv.name)};") }
+        }
+        for (name in schema.viewOrder) {
+            if (changed.contains(name)) { this.add(this.compiler.viewDdl(schema.tables[name]!!).trim()) }
+        }
     }
 
     proc enums() {

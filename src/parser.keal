@@ -132,6 +132,15 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 p.tables.add(t)
             } else if (this.atWord("enum") and this.peekAt(1).kind == "ident") {
                 p.enums.add(this.enumDecl())
+            } else if (this.atWord("view") and this.peekAt(1).kind == "ident") {
+                val t = this.advance()
+                val name = this.expectIdent("a name after `view`")
+                this.expect("{", "to open the view's query")
+                this.skipSemis()
+                val body = this.expr()
+                this.skipSemis()
+                this.expect("}", "to close the view")
+                p.views.add(ViewN(name, body, t.line, t.col))
             } else if (this.atWord("stored") and (this.peekAt(1).kind == "func" or this.peekAt(1).kind == "proc" or (this.peekAt(1).kind == "ident" and this.peekAt(1).text == "pure"))) {
                 p.stored.add(this.storedDecl())
             } else if (this.at("func")) {
@@ -512,7 +521,16 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 out.add(ArgN("", a))
             } else {
                 if (named) { this.fail(t.line, t.col, "a positional argument cannot follow a named one") }
-                out.add(ArgN("", this.expr()))
+                var ex = this.expr()
+                if (this.atWord("as")) {
+                    // `expr as name`: the column's name in a select.
+                    val at = this.advance()
+                    val n = Ex("named", at.line, at.col)
+                    n.text = this.expectIdent("a name after `as`")
+                    n.kids = [ex]
+                    ex = n
+                }
+                out.add(ArgN("", ex))
             }
             if (not this.eat(",")) { break }
         }
