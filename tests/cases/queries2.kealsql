@@ -1,0 +1,106 @@
+// The second tranche of query coverage: upserts, several rows, windows,
+// set operations, text and date functions, more aggregates, and sql().
+
+enum Kind { Book, Disc }
+
+table Product {
+    id:       Id
+    sku:      Slug
+    title:    String
+    kind:     Kind
+    price:    Decimal(10, 2)
+    stock:    Int = 0
+    released: Date?
+    tags:     List<String> = []
+}
+
+table Sale {
+    id:      Id
+    cascade product: RefId<Product>
+    soldAt:  Timestamptz = now()
+    units:   Int
+}
+
+// ---- inserts
+
+proc seed() {
+    insert(Product(sku = "B-1", title = "Dune", kind = Book, price = 9.90),
+           Product(sku = "B-2", title = "Solaris", kind = Book, price = 8.50),
+           Product(sku = "D-1", title = "Kind of Blue", kind = Disc, price = 14.00))
+}
+
+// An upsert on the slug: the second time, the stock is added to.
+proc restock(sku: String, title: String, kind: Kind, price: Decimal, units: Int) {
+    insert(Product(sku = sku, title = title, kind = kind, price = price, stock = units))
+        .onConflict(sku)
+        .update(stock = Product.stock + excluded.stock, price = excluded.price)
+}
+
+proc register(sku: String, title: String, kind: Kind, price: Decimal) {
+    insert(Product(sku = sku, title = title, kind = kind, price = price)).onConflict(sku).ignore()
+}
+
+// ---- windows
+
+func rankedByPrice(): List<(String, Kind, Int)> {
+    from(Product).orderBy(kind, price.desc).select(title, kind, rank().over(partition(kind), order(price.desc)))
+}
+
+func runningStock(): List<(String, Int, Int?)> {
+    from(Product).orderBy(sku).select(sku, sum(stock).over(order(sku)) ?: 0, lag(stock).over(order(sku)))
+}
+
+// ---- set operations
+
+func cheapOrDisc(): List<(String, String)> {
+    from(Product).where(price < 9).select(sku, title)
+        .union(from(Product).where(kind == Disc).select(sku, title))
+}
+
+func booksNotCheap(): List<String> {
+    from(Product).where(kind == Book).select(sku).except(from(Product).where(price < 9).select(sku))
+}
+
+// ---- functions
+
+func shouted(): List<(String, String, Int, Bool)> {
+    from(Product).orderBy(sku).select(sku.replace("-", ""), title.upper().substring(1, 3), title.position("o"), sku.matches("^B-[0-9]+$"))
+}
+
+func padded(): List<(String, String)> {
+    from(Product).orderBy(sku).select(sku.padStart(6, "0"), price.toString() + " EUR")
+}
+
+func releaseYears(): List<(String, Int?, Date?)> {
+    from(Product).orderBy(sku).select(sku, released?.year(), released?.plusDays(30))
+}
+
+func summary(): List<(Kind, Int, String?, Decimal?)> {
+    from(Product).groupBy(kind).orderBy(kind).select(kind, countDistinct(price), stringAgg(sku, ",", sku), max(price))
+}
+
+func flags(): (Bool?, Bool?) {
+    from(Product).select(boolAnd(stock >= 0), boolOr(price > 100)).single()
+}
+
+func allTags(): List<String>? {
+    from(Product).select(arrayAgg(sku, sku.desc)).single()
+}
+
+func crossed(): Int {
+    from(Product as a).crossJoin(Product as b).where(a.id < b.id).count()
+}
+
+func withSales(): List<(String?, Int?)> {
+    from(Product as p).fullJoin(Sale as s, s.product == p.id).orderBy(p.sku.nullsLast).select(p.sku, s.units)
+}
+
+// ---- the escape hatch
+
+func titlesLike(pattern: String): List<(Int, String)> {
+    sql("SELECT id, title FROM product WHERE title ILIKE $1 ORDER BY id")
+}
+
+proc dropSales() {
+    sql("DELETE FROM sale")
+}

@@ -1,0 +1,69 @@
+sku|title|price|stock
+B-1|Dune|10.50|8
+B-2|Solaris|8.50|0
+B-3|Foundation|7.00|0
+D-1|Kind of Blue|14.00|0
+(4 rows)
+title|kind|rank
+Dune|Book|1
+Solaris|Book|2
+Foundation|Book|3
+Kind of Blue|Disc|1
+(4 rows)
+sku|coalesce|lag
+B-1|8|
+B-2|8|8
+B-3|8|0
+D-1|8|0
+(4 rows)
+sku|title
+D-1|Kind of Blue
+B-3|Foundation
+B-2|Solaris
+(3 rows)
+sku
+B-1
+(1 row)
+replace|substr|position|?column?
+B1|DUN|0|t
+B2|SOL|2|t
+B3|FOU|2|t
+D1|KIN|6|f
+(4 rows)
+lpad|?column?
+000B-1|10.50 EUR
+000B-2|8.50 EUR
+000B-3|7.00 EUR
+000D-1|14.00 EUR
+(4 rows)
+sku|extract|?column?
+B-1|2024|2024-04-14
+B-2||
+B-3||
+D-1||
+(4 rows)
+kind|count|string_agg|max
+Book|3|B-1,B-2,B-3|10.50
+Disc|1|D-1|14.00
+(2 rows)
+bool_and|bool_or
+t|f
+(1 row)
+array_agg
+{D-1,B-3,B-2,B-1}
+(1 row)
+count
+6
+(1 row)
+sku|units
+B-1|2
+B-2|
+B-3|
+D-1|
+(4 rows)
+id|title
+1|Dune
+(1 row)
+count
+0
+(1 row)

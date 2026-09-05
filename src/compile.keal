@@ -12,6 +12,7 @@ import "./schema.keal"
 package class Src(package val alias: String, package val table: Table) {
     package var sqlAlias: String = ""
     package var bare: Bool = false           // columns emitted unqualified: a CHECK, a DEFAULT
+    package var byName: Bool = false         // implicit, yet reachable by its alias: `excluded`
     package var implicit: Bool = false
     package var optional: Bool = false       // reached by a LEFT JOIN
     package var joinSql: String = ""         // "" for the from table
@@ -57,6 +58,7 @@ package class Plan() {
     package var selectNames: List<String> = []   // a column's name when the expression is one; else "c<i>"
     package var terminal: String = ""        // select / count / exists
     package var fetch: String = ""           // first / single
+    package var setOps: List<String> = []    // "UNION (...)" ... appended after the select
     package var rowTable: String = ""        // select(*): the table
 }
 
@@ -445,6 +447,25 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         var produced = ""
         val info = QueryInfo(f.name, f.isFunc)
         when (rootName) {
+            "sql" -> {
+                // The escape hatch: SQL as written, `$1`.. the parameters in order, the
+                // declared result trusted. The suite runs it; the compiler cannot check it.
+                if (steps.size > 1) { this.fail(steps[1].line, steps[1].col, "nothing follows `sql(...)`") }
+                if (root.args.size != 1 or root.args[0].value.kind != "str") { this.fail(root.line, root.col, "`sql` takes one string, the statement") }
+                sql = root.args[0].value.text.trim()
+                val head = (sql.split(" ").first() ?: "").toUpper()
+                val preparable = when (head) {
+                    "SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "MERGE" -> true
+                    else -> false
+                }
+                unless (preparable) { this.fail(root.line, root.col, "a query is a prepared statement, and PostgreSQL prepares SELECT, INSERT, UPDATE, DELETE, WITH, VALUES and MERGE — not `${head}`") }
+                val ret = f.ret
+                if (ret == null) { produced = ""; info.kind = "none" }
+                else {
+                    produced = this.renderDeclared(ret)
+                    this.declaredInfo(ret, info)
+                }
+            }
             "insert" -> {
                 val r = this.compileInsert(root, steps, f.isFunc)
                 sql = r[0]; produced = r[1]
@@ -458,6 +479,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 info.rowTable = r[1]
             }
             else -> {
+                if (rootName == "insert" or rootName == "update" or rootName == "delete") { this.fail(root.line, root.col, "unreachable") }
                 val plan = Plan()
                 this.walkSelect(steps, plan)
                 if (plan.terminal == "") { this.fail(body.line, body.col, "the query ends without `select`, `count` or `exists`") }
@@ -492,20 +514,46 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return "${header}PREPARE ${sqlName(f.name)}${types} AS\n${sql};\n"
     }
 
+    /// What a `sql(...)` query answers, from its declared type: the shape a
+    /// stored function reads it through.
+    proc declaredInfo(t: TypeN, var info: QueryInfo) {
+        var one = t
+        info.kind = "single"
+        if (t.name == "List") { info.kind = "list"; one = t.args[0] }
+        else if (t.optional) { info.kind = "first" }
+        if (one.name == "tuple") {
+            var k = 0
+            for (m in one.args) {
+                info.colTys.add(this.tyOf(m))
+                info.colNames.add("c${k}")
+                k += 1
+            }
+        } else {
+            val ty = this.tyOf(one)
+            if (ty.name.startsWith("row:")) { info.rowTable = ty.name.drop(4); info.colTys.add(ty) }
+            else { info.colTys.add(Ty(ty.name, ty.optional and info.kind != "first")); info.colNames.add("c0") }
+        }
+    }
+
     /// The declared result type, rendered the way `producedType` renders.
     func renderDeclared(t: TypeN): String {
         return when (t.name) {
-            "List" -> "List<${this.renderDeclared(t.args[0])}>"
-            "tuple" -> "(${t.args.map({ this.renderDeclared(it) }).join(", ")})" + (if (t.optional) { "?" } else { "" })
-            else -> {
-                val ty = this.tyOf(t)
-                if (ty.name.startsWith("row:")) { ty.name.drop(4) + (if (ty.optional) { "?" } else { "" }) } else { ty.render() }
-            }
+            // `List<T>` at the top is many rows — never optional; `List<T>?` is one array value.
+            "List" -> if (t.optional) { this.renderMember(t) } else { "List<${this.renderMember(t.args[0])}>" }
+            "tuple" -> "(${t.args.map({ this.renderMember(it) }).join(", ")})" + (if (t.optional) { "?" } else { "" })
+            else -> this.renderMember(t)
         }
+    }
+
+    /// A value's type as written: inside a tuple or a list, `List<T>` is an array.
+    func renderMember(t: TypeN): String {
+        if (t.name == "tuple") { return "(${t.args.map({ this.renderMember(it) }).join(", ")})" + (if (t.optional) { "?" } else { "" }) }
+        return this.renderTy(this.tyOf(t))
     }
 
     func renderTy(ty: Ty): String {
         if (ty.name.startsWith("row:")) { return ty.name.drop(4) + (if (ty.optional) { "?" } else { "" }) }
+        if (ty.name.endsWith("[]")) { return "List<${ty.name.take(ty.name.length - 2)}>" + (if (ty.optional) { "?" } else { "" }) }
         return ty.render()
     }
 
@@ -575,8 +623,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         var i = start
         while (i < steps.size) {
             val step = steps[i]
-            if (plan.terminal != "" and step.text != "first" and step.text != "single") {
-                this.fail(step.line, step.col, "`${plan.terminal}` ends the query; nothing follows it but `first()` or `single()`")
+            val afterTerminal = when (step.text) {
+                "first", "single", "union", "unionAll", "intersect", "except" -> true
+                else -> false
+            }
+            if (plan.terminal != "" and not afterTerminal) {
+                this.fail(step.line, step.col, "`${plan.terminal}` ends the query; nothing follows it but `first()`, `single()` or a set operation")
             }
             when (step.text) {
                 "where", "unless" -> {
@@ -587,15 +639,51 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                     val sql = if (step.text == "unless") { "NOT (${e.sql})" } else { e.sql }
                     if (plan.grouped) { plan.havings.add(sql) } else { plan.wheres.add(sql) }
                 }
-                "join", "leftJoin" -> {
+                "join", "leftJoin", "fullJoin" -> {
                     if (step.args.size != 2) { this.fail(step.line, step.col, "`${step.text}` takes a table and a condition: `${step.text}(Table as t, t.x == y)`") }
                     val s = this.sourceOf(step.args[0].value, false)
                     if (plan.sources.any({ it.alias == s.alias })) { this.fail(step.line, step.col, "`${s.alias}` is already in scope; give the join an alias: `${s.table.name} as t`") }
-                    s.optional = step.text == "leftJoin"
+                    s.optional = step.text != "join"
+                    if (step.text == "fullJoin") {
+                        // Either side may be missing: every column in scope is optional from here on.
+                        for (o in plan.sources) { o.optional = true }
+                    }
                     plan.sources.add(s)
                     val on = this.emit(step.args[1].value, plan)
                     if (on.ty.name != "Bool" and on.ty.name != "Bool3") { this.fail(step.line, step.col, "a join condition is a `Bool`") }
-                    s.joinSql = "${if (s.optional) { "LEFT JOIN" } else { "JOIN" }} ${this.fromClause(s)} ON ${on.sql}"
+                    val word = when (step.text) {
+                        "leftJoin" -> "LEFT JOIN"
+                        "fullJoin" -> "FULL JOIN"
+                        else -> "JOIN"
+                    }
+                    s.joinSql = "${word} ${this.fromClause(s)} ON ${on.sql}"
+                }
+                "crossJoin" -> {
+                    if (step.args.size != 1) { this.fail(step.line, step.col, "`crossJoin` takes a table") }
+                    val s = this.sourceOf(step.args[0].value, false)
+                    if (plan.sources.any({ it.alias == s.alias })) { this.fail(step.line, step.col, "`${s.alias}` is already in scope; give the join an alias") }
+                    plan.sources.add(s)
+                    s.joinSql = "CROSS JOIN ${this.fromClause(s)}"
+                }
+                "union", "unionAll", "intersect", "except" -> {
+                    // Two complete selects, combined. The other side is a query of its own.
+                    if (plan.terminal != "select") { this.fail(step.line, step.col, "`${step.text}` combines two queries that end in `select`") }
+                    val other = this.oneArg(step, "a query")
+                    val sub = Plan()
+                    this.walkSelect(this.flatten(other), sub)
+                    if (sub.terminal != "select") { this.fail(other.line, other.col, "the other side of `${step.text}` ends in `select`") }
+                    if (sub.selectTys.size != plan.selectTys.size) { this.fail(other.line, other.col, "`${step.text}`: ${plan.selectTys.size} column${if (plan.selectTys.size == 1) { "" } else { "s" }} on the left, ${sub.selectTys.size} on the right") }
+                    var k = 0
+                    while (k < sub.selectTys.size) {
+                        unless (this.sameType(plan.selectTys[k], sub.selectTys[k])) { this.fail(other.line, other.col, "`${step.text}`: column ${k + 1} is a `${this.renderTy(plan.selectTys[k])}` on the left and a `${this.renderTy(sub.selectTys[k])}` on the right") }
+                        if (sub.selectTys[k].optional and not plan.selectTys[k].optional) { plan.selectTys.set(k, plan.selectTys[k].withOptional(true)) }
+                        k += 1
+                    }
+                    val word = when (step.text) {
+                        "unionAll" -> "UNION ALL"
+                        else -> step.text.toUpper()
+                    }
+                    plan.setOps.add("${word} (${this.renderSelect(sub).replace("\n", " ")})")
                 }
                 "orderBy" -> {
                     if (step.args.isEmpty()) { this.fail(step.line, step.col, "`orderBy` needs at least one key") }
@@ -673,7 +761,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     func hasAggregate(e: Ex): Bool {
         if (e.kind == "call") {
             val agg = when (e.text) {
-                "count", "sum", "avg", "min", "max" -> true
+                "count", "sum", "avg", "min", "max", "countDistinct", "stringAgg", "arrayAgg", "boolAnd", "boolOr" -> true
                 else -> false
             }
             if (agg) { return true }
@@ -787,6 +875,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             lines.add("SELECT ${if (plan.distinct) { "DISTINCT " } else { "" }}${plan.selects.join(", ")}")
         }
         lines.addAll(body)
+        for (op in plan.setOps) { lines.add(op) }
         if (not plan.orderBy.isEmpty()) { lines.add("ORDER BY ${plan.orderBy.join(", ")}") }
         if (plan.fetch == "first") { lines.add("LIMIT 1") }
         else if (plan.fetch == "single") { lines.add("LIMIT 2") }
@@ -797,31 +886,97 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     // ---- mutations ----------------------------------------------------
 
+    /// `insert(Row(...), Row(...))`, then `.onConflict(cols).ignore()` or
+    /// `.onConflict(cols).update(col = expr, ...)` where `excluded` names
+    /// the row that was not inserted.
     func compileInsert(root: Ex, steps: List<Ex>, returning: Bool): List<String> {
-        if (steps.size > 1) { this.fail(steps[1].line, steps[1].col, "nothing follows `insert(...)`") }
-        if (root.args.size != 1 or root.args[0].value.kind != "call") { this.fail(root.line, root.col, "`insert` takes a row: `insert(Table(column = value, ...))`") }
-        val row = root.args[0].value
-        val t = this.schema.tables[row.text]
-        if (t == null) { this.fail(row.line, row.col, "`${row.text}` is not a table") }
+        if (root.args.isEmpty() or root.args.any({ it.value.kind != "call" or it.name != "" })) { this.fail(root.line, root.col, "`insert` takes rows: `insert(Table(column = value, ...))`") }
+        val first = root.args[0].value
+        val t = this.schema.tables[first.text]
+        if (t == null) { this.fail(first.line, first.col, "`${first.text}` is not a table") }
         val plan = Plan()                      // no table in scope: values are parameters and literals
-        val cols: List<String> = []
-        val vals: List<String> = []
-        val named: List<String> = []
-        for (a in row.args) {
-            if (a.name == "") { this.fail(a.value.line, a.value.col, "a row names its columns: `${t.name}(column = value)`") }
-            val c = t.column(a.name)
-            if (c == null) { this.fail(a.value.line, a.value.col, "`${t.name}` has no column `${a.name}`") }
-            if (c.isSerial) { this.fail(a.value.line, a.value.col, "`${a.name}` is assigned by the database; do not name it") }
-            if (named.contains(a.name)) { this.fail(a.value.line, a.value.col, "`${a.name}` is given twice") }
-            named.add(a.name)
-            val v = this.emitAs(a.value, plan, c.ty())
-            this.checkAssignable(a.value, v, c)
-            cols.add(sqlName(a.name))
-            vals.add(v.sql)
+        var cols: List<String> = []
+        val rows: List<String> = []
+        for (arg in root.args) {
+            val row = arg.value
+            if (row.text != t.name) { this.fail(row.line, row.col, "every row of one `insert` is a `${t.name}`") }
+            val vals: List<String> = []
+            val named: List<String> = []
+            for (a in row.args) {
+                if (a.name == "") { this.fail(a.value.line, a.value.col, "a row names its columns: `${t.name}(column = value)`") }
+                val c = t.column(a.name)
+                if (c == null) { this.fail(a.value.line, a.value.col, "`${t.name}` has no column `${a.name}`") }
+                if (c.isSerial) { this.fail(a.value.line, a.value.col, "`${a.name}` is assigned by the database; do not name it") }
+                if (named.contains(a.name)) { this.fail(a.value.line, a.value.col, "`${a.name}` is given twice") }
+                named.add(a.name)
+                val v = this.emitAs(a.value, plan, c.ty())
+                this.checkAssignable(a.value, v, c)
+                vals.add(v.sql)
+            }
+            val missing = t.columns.filter({ not it.isSerial and not it.optional and it.default == "" and not named.contains(it.name) }).map({ it.name })
+            unless (missing.isEmpty()) { this.fail(row.line, row.col, "`${t.name}` needs `${missing.join("`, `")}`; a column without `?` or a default must be given") }
+            if (rows.isEmpty()) { cols = named }
+            else if (named.join(",") != cols.join(",")) { this.fail(row.line, row.col, "every row of one `insert` names the same columns, in the same order") }
+            rows.add("(${vals.join(", ")})")
         }
-        val missing = t.columns.filter({ not it.isSerial and not it.optional and it.default == "" and not named.contains(it.name) }).map({ it.name })
-        unless (missing.isEmpty()) { this.fail(row.line, row.col, "`${t.name}` needs `${missing.join("`, `")}`; a column without `?` or a default must be given") }
-        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.join(", ")})\nVALUES (${vals.join(", ")})"
+        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.map({ sqlName(it) }).join(", ")})\nVALUES ${rows.join(",\n       ")}"
+        // ---- the conflict clause
+        var i = 1
+        if (i < steps.size) {
+            val step = steps[i]
+            if (step.text != "onConflict") { this.fail(step.line, step.col, "after `insert(...)` comes `onConflict(...)`, or nothing") }
+            if (step.args.isEmpty()) { this.fail(step.line, step.col, "`onConflict` names the unique columns: `onConflict(sku)`") }
+            val keyCols: List<String> = []
+            for (a in step.args) {
+                if (a.value.kind != "ident") { this.fail(a.value.line, a.value.col, "`onConflict` takes column names") }
+                if (t.column(a.value.text) == null) { this.fail(a.value.line, a.value.col, "`${t.name}` has no column `${a.value.text}`") }
+                keyCols.add(a.value.text)
+            }
+            // The columns must be a key the table has: a unique column, or a unique(a, b).
+            var isKey = false
+            if (keyCols.size == 1) {
+                val kc = t.column(keyCols[0])!!
+                isKey = kc.isPrimary or kc.isSlug or kc.isUnique
+            }
+            if (t.decl.uniques.any({ it.join(",") == keyCols.join(",") })) { isKey = true }
+            unless (isKey) { this.fail(step.line, step.col, "`onConflict(${keyCols.join(", ")})` needs a unique key on exactly those columns") }
+            i += 1
+            if (i >= steps.size) { this.fail(step.line, step.col, "after `onConflict(...)` comes `ignore()` or `update(column = value, ...)`") }
+            val action = steps[i]
+            val keys = keyCols.map({ sqlName(it) }).join(", ")
+            when (action.text) {
+                "ignore" -> {
+                    this.noArgs(action)
+                    sql += "\nON CONFLICT (${keys}) DO NOTHING"
+                }
+                "update" -> {
+                    if (action.args.isEmpty()) { this.fail(action.line, action.col, "`update` needs `column = value`") }
+                    val target = Src(t.name, t)
+                    target.sqlAlias = sqlName(t.name)
+                    val excluded = Src("excluded", t)
+                    excluded.sqlAlias = "EXCLUDED"
+                    excluded.implicit = true
+                    excluded.byName = true
+                    val uplan = Plan()
+                    uplan.sources.add(target)
+                    uplan.sources.add(excluded)
+                    val sets: List<String> = []
+                    for (a in action.args) {
+                        if (a.name == "") { this.fail(a.value.line, a.value.col, "`update` names its columns: `update(column = value)`") }
+                        val c = t.column(a.name)
+                        if (c == null) { this.fail(a.value.line, a.value.col, "`${t.name}` has no column `${a.name}`") }
+                        if (c.isSerial) { this.fail(a.value.line, a.value.col, "`${a.name}` is assigned by the database") }
+                        val v = this.emitAs(a.value, uplan, c.ty())
+                        this.checkAssignable(a.value, v, c)
+                        sets.add("${sqlName(a.name)} = ${v.sql}")
+                    }
+                    sql += "\nON CONFLICT (${keys}) DO UPDATE SET ${sets.join(", ")}"
+                }
+                else -> { this.fail(action.line, action.col, "after `onConflict(...)` comes `ignore()` or `update(...)`, not `${action.text}`") }
+            }
+            i += 1
+        }
+        if (i < steps.size) { this.fail(steps[i].line, steps[i].col, "nothing follows the insert here") }
         if (returning) { sql += "\nRETURNING *" }
         return [sql, t.name]
     }
@@ -1007,7 +1162,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     func field(e: Ex, var plan: Plan): Val {
         val recv = e.kids[0]
         if (recv.kind == "ident") {
-            val s = plan.sources.find({ it.alias == recv.text and not it.implicit })
+            val s = plan.sources.find({ it.alias == recv.text and (not it.implicit or it.byName) })
             if (s != null) {
                 val c = s.table.column(e.text)
                 if (c == null) { this.fail(e.line, e.col, "`${s.table.name}` has no column `${e.text}`") }
@@ -1078,8 +1233,11 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             }
             return Val("(${this.renderSelect(sub).replace("\n", " ")})", ty)
         }
-        if (e.safe) { this.fail(e.line, e.col, "`?.` reaches through a reference, not a method") }
+        if (e.text == "over") { return this.window(e, plan) }     // before the receiver: a window head is not a value alone
         val recv = this.emit(e.kids[0], plan)
+        // `x?.f()` on an optional: SQL's functions answer null to null, so `.` says the same;
+        // both are accepted, and `?.` on a value that is never null is refused as in Keal.
+        if (e.safe and not recv.ty.optional) { this.fail(e.line, e.col, "`${recv.sql}` is never null; write `.${e.text}`") }
         val args: List<Val> = []
         for (a in e.args) { args.add(this.emit(a.value, plan)) }
         val opt = recv.ty.optional or args.any({ it.ty.optional })
@@ -1099,6 +1257,73 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 this.needs(e, recv, "String")
                 this.argCount(e, 0)
                 return Val("length(${recv.sql})", Ty("Int", recv.ty.optional))
+            }
+            "replace" -> {
+                this.needs(e, recv, "String"); this.argCount(e, 2)
+                this.needs(e, args[0], "String"); this.needs(e, args[1], "String")
+                return Val("replace(${recv.sql}, ${args[0].sql}, ${args[1].sql})", Ty("String", opt))
+            }
+            "substring" -> {
+                // `s.substring(from, count)`: 1-based, as SQL counts.
+                this.needs(e, recv, "String"); this.argCount(e, 2)
+                this.needs(e, args[0], "Int"); this.needs(e, args[1], "Int")
+                return Val("substr(${recv.sql}, ${args[0].sql}, ${args[1].sql})", Ty("String", opt))
+            }
+            "position" -> {
+                this.needs(e, recv, "String"); this.argCount(e, 1); this.needs(e, args[0], "String")
+                return Val("position(${args[0].sql} in ${recv.sql})", Ty("Int", opt))
+            }
+            "split" -> {
+                this.needs(e, recv, "String"); this.argCount(e, 1); this.needs(e, args[0], "String")
+                return Val("string_to_array(${recv.sql}, ${args[0].sql})", Ty("String[]", opt))
+            }
+            "matches", "imatches" -> {
+                this.needs(e, recv, "String"); this.argCount(e, 1); this.needs(e, args[0], "String")
+                return Val("${recv.sql} ${if (e.text == "matches") { "~" } else { "~*" }} ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+            }
+            "padStart", "padEnd" -> {
+                this.needs(e, recv, "String"); this.argCount(e, 2)
+                this.needs(e, args[0], "Int"); this.needs(e, args[1], "String")
+                return Val("${if (e.text == "padStart") { "lpad" } else { "rpad" }}(${recv.sql}, ${args[0].sql}, ${args[1].sql})", Ty("String", opt))
+            }
+            "toString" -> {
+                this.argCount(e, 0)
+                return Val("CAST(${recv.sql} AS text)", Ty("String", recv.ty.optional))
+            }
+            "toInt", "toFloat", "toDecimal" -> {
+                this.argCount(e, 0)
+                unless (recv.ty.name == "String" or this.isNumeric(recv.ty)) { this.fail(e.line, e.col, "`${e.text}` converts a `String` or a number, not a `${this.renderTy(recv.ty)}`") }
+                val to = when (e.text) {
+                    "toInt" -> "Int"
+                    "toFloat" -> "Float"
+                    else -> "Decimal"
+                }
+                return Val("CAST(${recv.sql} AS ${sqlType(to, 0, this.schema)})", Ty(to, recv.ty.optional))
+            }
+            "year", "month", "day", "hour", "minute" -> {
+                this.argCount(e, 0)
+                unless (this.isTemporal(recv.ty)) { this.fail(e.line, e.col, "`${e.text}` is asked of a date or a time, not a `${this.renderTy(recv.ty)}`") }
+                return Val("CAST(EXTRACT(${e.text.toUpper()} FROM ${recv.sql}) AS integer)", Ty("Int", recv.ty.optional))
+            }
+            "date" -> {
+                this.argCount(e, 0)
+                unless (recv.ty.name == "Timestamp" or recv.ty.name == "Timestamptz") { this.fail(e.line, e.col, "`date` is asked of a timestamp") }
+                return Val("CAST(${recv.sql} AS date)", Ty("Date", recv.ty.optional))
+            }
+            "plusDays", "plusHours", "plusMinutes" -> {
+                this.argCount(e, 1); this.needs(e, args[0], "Int")
+                unless (this.isTemporal(recv.ty)) { this.fail(e.line, e.col, "`${e.text}` is asked of a date or a time") }
+                if (recv.ty.name == "Date") {
+                    // A date plus whole days stays a date; hours would make it a timestamp.
+                    if (e.text != "plusDays") { this.fail(e.line, e.col, "`${e.text}` on a `Date` would answer a timestamp; `plusDays`, or a `Timestamp`") }
+                    return Val("${recv.sql} + ${args[0].sql}", Ty("Date", opt))
+                }
+                val unit = when (e.text) {
+                    "plusDays" -> "days"
+                    "plusHours" -> "hours"
+                    else -> "mins"
+                }
+                return Val("${recv.sql} + make_interval(${unit} => ${args[0].sql})", Ty(recv.ty.name, opt))
             }
             "startsWith", "endsWith", "contains" -> {
                 this.needs(e, recv, "String")
@@ -1131,6 +1356,52 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return this.lit("", "")
     }
 
+    func isTemporal(ty: Ty): Bool {
+        return when (ty.name) {
+            "Date", "Time", "Timestamp", "Timestamptz" -> true
+            else -> false
+        }
+    }
+
+    /// `f(...).over(partition(a, b), order(k.desc))`: a window. `f` is a
+    /// window function or an aggregate.
+    func window(e: Ex, var plan: Plan): Val {
+        val fn = e.kids[0]
+        if (fn.kind != "call") { this.fail(e.line, e.col, "`over` follows a window function or an aggregate: `rowNumber().over(...)`") }
+        val head = when (fn.text) {
+            "rowNumber" -> { this.argCount(fn, 0); Val("row_number()", Ty("Int", false)) }
+            "rank" -> { this.argCount(fn, 0); Val("rank()", Ty("Int", false)) }
+            "denseRank" -> { this.argCount(fn, 0); Val("dense_rank()", Ty("Int", false)) }
+            "lag", "lead" -> {
+                this.argCount(fn, 1)
+                val v = this.emit(fn.args[0].value, plan)
+                Val("${fn.text}(${v.sql})", v.ty.withOptional(true))
+            }
+            "count", "sum", "avg", "min", "max" -> this.call(fn, plan)
+            else -> this.fail(fn.line, fn.col, "`${fn.text}` is not a window function; `rowNumber`, `rank`, `denseRank`, `lag`, `lead`, or an aggregate")
+        }
+        var partition = ""
+        var order = ""
+        for (a in e.args) {
+            val v = a.value
+            if (v.kind != "call" or (v.text != "partition" and v.text != "order")) { this.fail(v.line, v.col, "`over` takes `partition(columns)` and `order(keys)`") }
+            if (v.args.isEmpty()) { this.fail(v.line, v.col, "`${v.text}` needs at least one column") }
+            if (v.text == "partition") {
+                if (partition != "") { this.fail(v.line, v.col, "one `partition` per window") }
+                val parts: List<String> = []
+                for (x in v.args) { parts.add(this.emit(x.value, plan).sql) }
+                partition = "PARTITION BY ${parts.join(", ")}"
+            } else {
+                if (order != "") { this.fail(v.line, v.col, "one `order` per window") }
+                val keys: List<String> = []
+                for (x in v.args) { keys.add(this.orderKey(x.value, plan)) }
+                order = "ORDER BY ${keys.join(", ")}"
+            }
+        }
+        val spec = if (partition != "" and order != "") { "${partition} ${order}" } else { partition + order }
+        return Val("${head.sql} OVER (${spec})", head.ty)
+    }
+
     proc needs(e: Ex, v: Val, ty: String) {
         if (v.ty.name != ty) { this.fail(e.line, e.col, "`${e.text}` needs a `${ty}`, not `${this.renderTy(v.ty)}`") }
     }
@@ -1157,6 +1428,33 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 val name = if (e.text == "avg") { "Float" } else { v.ty.name }
                 return Val("${e.text}(${v.sql})", Ty(name, true))
             }
+            "countDistinct" -> {
+                this.argCount(e, 1)
+                return Val("count(DISTINCT ${this.emit(e.args[0].value, plan).sql})", Ty("Int", false))
+            }
+            "stringAgg" -> {
+                // `stringAgg(x, sep)`, or `stringAgg(x, sep, key)` to say the order — without one,
+                // the database picks, and two runs may disagree.
+                if (e.args.size != 2 and e.args.size != 3) { this.fail(e.line, e.col, "`stringAgg` takes a value, a separator, and an order key if the order matters") }
+                val v = this.emit(e.args[0].value, plan)
+                val sep = this.emit(e.args[1].value, plan)
+                this.needs(e, v, "String"); this.needs(e, sep, "String")
+                val order = if (e.args.size == 3) { " ORDER BY " + this.orderKey(e.args[2].value, plan) } else { "" }
+                return Val("string_agg(${v.sql}, ${sep.sql}${order})", Ty("String", true))
+            }
+            "arrayAgg" -> {
+                if (e.args.size != 1 and e.args.size != 2) { this.fail(e.line, e.col, "`arrayAgg` takes a value, and an order key if the order matters") }
+                val v = this.emit(e.args[0].value, plan)
+                val order = if (e.args.size == 2) { " ORDER BY " + this.orderKey(e.args[1].value, plan) } else { "" }
+                return Val("array_agg(${v.sql}${order})", Ty(v.ty.name + "[]", true))
+            }
+            "boolAnd", "boolOr" -> {
+                this.argCount(e, 1)
+                val v = this.emit(e.args[0].value, plan)
+                if (v.ty.name != "Bool" and v.ty.name != "Bool3") { this.fail(e.line, e.col, "`${e.text}` needs a `Bool`") }
+                return Val("${if (e.text == "boolAnd") { "bool_and" } else { "bool_or" }}(${v.sql})", Ty("Bool", true))
+            }
+            "rowNumber", "rank", "denseRank", "lag", "lead" -> { this.fail(e.line, e.col, "`${e.text}()` is a window function; write `${e.text}(...).over(partition(...), order(...))`") }
             "from", "insert", "update", "delete" -> { this.fail(e.line, e.col, "`${e.text}` starts a query; it cannot sit inside an expression") }
             else -> {
                 val s = this.program.stored.find({ it.name == e.text })

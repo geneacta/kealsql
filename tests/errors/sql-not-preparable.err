@@ -1,0 +1,1 @@
+error tests/errors/sql-not-preparable.kealsql:3:5 a query is a prepared statement, and PostgreSQL prepares SELECT, INSERT, UPDATE, DELETE, WITH, VALUES and MERGE — not `TRUNCATE`

@@ -1,0 +1,24 @@
+-- Run after queries2.sql in the same session; the output is queries2.exec.out.
+EXECUTE seed;
+EXECUTE restock('B-1', 'Dune', 'Book', 9.90, 5);
+EXECUTE restock('B-1', 'Dune (new)', 'Book', 10.50, 3);
+EXECUTE register('B-1', 'Dune again', 'Book', 1.00);
+EXECUTE register('B-3', 'Foundation', 'Book', 7.00);
+SELECT sku, title, price, stock FROM product ORDER BY sku;
+EXECUTE ranked_by_price;
+EXECUTE running_stock;
+EXECUTE cheap_or_disc;
+EXECUTE books_not_cheap;
+EXECUTE shouted;
+EXECUTE padded;
+UPDATE product SET released = '2024-03-15' WHERE sku = 'B-1';
+EXECUTE release_years;
+EXECUTE summary;
+EXECUTE flags;
+EXECUTE all_tags;
+EXECUTE crossed;
+INSERT INTO sale (product, units) VALUES (1, 2);
+EXECUTE with_sales;
+EXECUTE titles_like('%dune%');
+EXECUTE drop_sales;
+SELECT count(*) FROM sale;
