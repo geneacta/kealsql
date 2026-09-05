@@ -1,0 +1,21 @@
+id|title
+1|Hello
+(1 row)
+name
+bob
+(1 row)
+name
+
+(1 row)
+count
+1
+(1 row)
+id|author|editor|title|status|created
+2|1||Draft one|Published|2026-01-02 00:00:00
+(1 row)
+count
+0
+(1 row)
+count
+2
+(1 row)

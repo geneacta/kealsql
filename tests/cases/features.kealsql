@@ -85,7 +85,11 @@ func admins(): Int {
 }
 
 func page(n: Int): List<String> {
-    from(Account).orderBy(age.desc.nullsLast, login).limit(10).offset(n * 10).distinct().select(login)
+    from(Account).orderBy(login).limit(10).offset(n * 10).distinct().select(login)
+}
+
+func oldestFirst(): List<(String, Int?)> {
+    from(Account).orderBy(age.desc.nullsLast, login).select(login, age)
 }
 
 func byAccount(acc: Int): List<(Int, String)> {

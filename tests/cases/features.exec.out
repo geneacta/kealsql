@@ -1,0 +1,57 @@
+id|org|login|role|age
+1|acme|ada|Admin|
+(1 row)
+id|org|login|role|age
+2|acme|bob|Member|
+(1 row)
+id|org|login|role|age
+2|acme|bob|Member|70
+(1 row)
+login
+ada
+(1 row)
+id
+(0 rows)
+id
+1
+(1 row)
+role|count
+(0 rows)
+case
+admin
+(1 row)
+name
+acme
+(1 row)
+id
+2
+(1 row)
+exists
+t
+(1 row)
+count
+0
+(1 row)
+login
+ada
+bob
+(2 rows)
+login|age
+bob|70
+ada|
+(2 rows)
+login
+bob
+(1 row)
+id|coalesce
+1|
+(1 row)
+id|by_login
+1|ada
+(1 row)
+login|age
+robert|
+(1 row)
+count
+0
+(1 row)

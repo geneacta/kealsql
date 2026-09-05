@@ -33,6 +33,7 @@ package class Plan() {
     package var havings: List<String> = []
     package var groupBy: List<String> = []
     package var orderBy: List<String> = []
+    package var orderKeys: List<String> = [] // the keys alone, without direction: for `distinct`
     package var distinct: Bool = false
     package var limit: String = ""
     package var offset: String = ""
@@ -325,8 +326,9 @@ package class Compiler(val file: String, val program: ProgramN) {
         val ret = f.ret
         var header = "-- ${sig}${if (ret != null) { ": " + ret.render() } else { "" }}\n"
         for (w in this.warnings) { header += "-- ${w}\n" }
-        val types = this.params.map({ it.sqlType }).join(", ")
-        return "${header}PREPARE ${sqlName(f.name)}(${types}) AS\n${sql};\n"
+        // PostgreSQL refuses `PREPARE name() AS`: the parentheses go with the parameters.
+        val types = if (this.params.isEmpty()) { "" } else { "(${this.params.map({ it.sqlType }).join(", ")})" }
+        return "${header}PREPARE ${sqlName(f.name)}${types} AS\n${sql};\n"
     }
 
     /// The declared result type, rendered the way `producedType` renders.
@@ -466,6 +468,12 @@ package class Compiler(val file: String, val program: ProgramN) {
                         }
                     }
                     if (plan.grouped) { this.checkGrouped(step, plan) }
+                    if (plan.distinct) {
+                        // SQL's rule: DISTINCT sorts what it selects, so an ORDER BY key must be selected.
+                        for (k in plan.orderKeys) {
+                            unless (plan.selects.contains(k)) { this.fail(step.line, step.col, "`distinct()` orders by what it selects; `${k}` is an `orderBy` key but not selected") }
+                        }
+                    }
                     plan.terminal = "select"
                 }
                 "count" -> { this.noArgs(step); plan.terminal = "count" }
@@ -535,6 +543,7 @@ package class Compiler(val file: String, val program: ProgramN) {
         if (not v.ty.optional and nulls != "") {
             this.fail(cur.line, cur.col, "`${v.sql}` is never null; drop the nulls rule")
         }
+        plan.orderKeys.add(v.sql)
         var s = v.sql
         if (dir != "") { s += " " + dir }
         if (nulls != "") { s += " " + nulls }

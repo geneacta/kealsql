@@ -72,6 +72,12 @@ keal src/main.keal file.kealsql        # print the SQL
 tests/run.sh                            # the suite: every case, byte for byte
 ```
 
+When PostgreSQL's `initdb` is on the machine, the suite also starts a
+private server in a temporary directory — no root, no configuration — loads
+every case's SQL into a fresh database, runs the `*.exec.sql` beside it in
+the same session, and compares the rows to `*.exec.out`. Without `initdb`
+it says so and compares the SQL only.
+
 The compiler runs on Keal's bytecode VM. `keal build` refuses it for now —
 its error path returns `Nothing`, which the C backend does not cover yet —
 and says so by name rather than mis-compiling, which is Keal's rule.
@@ -88,6 +94,7 @@ and says so by name rather than mis-compiling, which is Keal's rule.
 | `src/main.keal` | the command |
 | `tests/cases/*.kealsql` | each compiles to exactly its `.sql` |
 | `tests/errors/*.kealsql` | each fails with exactly its `.err` |
+| `tests/cases/*.exec.sql` | run on PostgreSQL after the case's SQL; the rows must be exactly `.exec.out` |
 
 ## Status
 

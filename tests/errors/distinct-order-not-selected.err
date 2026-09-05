@@ -1,0 +1,1 @@
+error tests/errors/distinct-order-not-selected.kealsql:5:39 `distinct()` orders by what it selects; `"user".age` is an `orderBy` key but not selected

@@ -33,7 +33,7 @@ WHERE post.id = $1
 LIMIT 1;
 
 -- func drafts(): Int
-PREPARE drafts() AS
+PREPARE drafts AS
 SELECT count(*)
 FROM post
 WHERE post.status = 'Draft';

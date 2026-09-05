@@ -27,13 +27,13 @@ CREATE TABLE audit (
 );
 
 -- func adults(): List<Account>
-PREPARE adults() AS
+PREPARE adults AS
 SELECT account.*
 FROM account
 WHERE account.age >= 18;
 
 -- func withoutAge(): List<String>
-PREPARE without_age() AS
+PREPARE without_age AS
 SELECT account.login
 FROM account
 WHERE account.age IS NULL;
@@ -52,7 +52,7 @@ FROM account
 WHERE account.age IS NOT DISTINCT FROM $1;
 
 -- func crowdedRoles(): List<(Role, Int)>
-PREPARE crowded_roles() AS
+PREPARE crowded_roles AS
 SELECT account.role, count(*)
 FROM account
 GROUP BY account.role
@@ -74,14 +74,14 @@ WHERE a.id = $1
 LIMIT 1;
 
 -- func auditNotes(): List<(Int, String)>
-PREPARE audit_notes() AS
+PREPARE audit_notes AS
 SELECT au.id, COALESCE(session.note, '')
 FROM audit AS au
 JOIN session ON au.session = session.token
 ORDER BY au.id;
 
 -- func oldMembers(): List<Int>
-PREPARE old_members() AS
+PREPARE old_members AS
 SELECT account.id
 FROM account
 WHERE account.id IN (SELECT account.id FROM account WHERE account.role = 'Member') AND COALESCE(account.age, 0) > 60;
@@ -95,7 +95,7 @@ SELECT EXISTS (
 );
 
 -- func admins(): Int
-PREPARE admins() AS
+PREPARE admins AS
 SELECT count(*)
 FROM account
 WHERE account.role = 'Admin' AND account.age IS NOT NULL;
@@ -104,9 +104,15 @@ WHERE account.role = 'Admin' AND account.age IS NOT NULL;
 PREPARE page(integer) AS
 SELECT DISTINCT account.login
 FROM account
-ORDER BY account.age DESC NULLS LAST, account.login
+ORDER BY account.login
 LIMIT 10
 OFFSET $1 * 10;
+
+-- func oldestFirst(): List<(String, Int?)>
+PREPARE oldest_first AS
+SELECT account.login, account.age
+FROM account
+ORDER BY account.age DESC NULLS LAST, account.login;
 
 -- func byAccount(acc: Int): List<(Int, String)>
 PREPARE by_account(integer) AS

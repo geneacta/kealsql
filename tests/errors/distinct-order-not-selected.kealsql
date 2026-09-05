@@ -1,0 +1,6 @@
+table User { id: Id
+    name: Slug
+    age: Int }
+func f(): List<String> {
+    from(User).orderBy(age).distinct().select(name)
+}
