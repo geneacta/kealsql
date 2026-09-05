@@ -1,0 +1,23 @@
+sku|price|stock|updates|note
+DRL-1|89.00|0|0|cordless
+HAM-1|15.00|0|0|new
+SAW-1|22.50|0|0|new
+(3 rows)
+sku|stock|updates
+DRL-1|0|0
+HAM-1|7|2
+SAW-1|0|0
+(3 rows)
+psql:tests/plkeal/triggers.exec.sql:10: ERROR:  stock below zero for SAW-1
+sku|stock|updates
+SAW-1|0|0
+(1 row)
+sku|change
+HAM-1|inserted at 15.00
+SAW-1|inserted at 22.50
+DRL-1|inserted at 89.00
+HAM-1|deleted with 2 updates
+(4 rows)
+after_error
+still alive
+(1 row)

@@ -91,8 +91,11 @@ package func plkealSource(compiler: Compiler): String {
     // query that selects several columns, named after it (`postsRow` for
     // `posts`), its fields named after the columns. Never a tuple: a tuple
     // holds five at most, and a name beats a position.
+    val triggers = program.triggers
+    val hasSpi = not queries.isEmpty() or not triggers.isEmpty()
     val rowTables: List<String> = []
     for (q in queries) { if (q.rowTable != "" and not rowTables.contains(q.rowTable)) { rowTables.add(q.rowTable) } }
+    for (tr in triggers) { unless (rowTables.contains(tr.table)) { rowTables.add(tr.table) } }
     for (name in rowTables) {
         val t = schema.tables[name]!!
         out += recordDecl(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }))
@@ -108,6 +111,47 @@ package func plkealSource(compiler: Compiler): String {
     for (s in program.stored) {
         val params = s.params.map({ "${it.name}: ${it.ty.render()}" }).join(", ")
         out += "func ${s.name}(${params}): ${s.ret!!.render()} {${s.body}}\n\n"
+    }
+
+    // ---- the trigger bodies: `row` is the row being written, `old` the one it replaces
+    for (tr in triggers) {
+        val t = schema.tables[tr.table]!!
+        val params = when (tr.event) {
+            "insert" -> "row: ${t.name}"
+            "update" -> "row: ${t.name}, old: ${t.name}"
+            else -> "old: ${t.name}"
+        }
+        val answers = tr.timing == "before" and tr.event != "delete"
+        if (answers) { out += "func trg_${tr.name}(${params}): ${t.name} {${tr.body}}\n\n" }
+        else { out += "proc trg_${tr.name}(${params}) {${tr.body}}\n\n" }
+    }
+
+    // ---- the trigger bridge, as seen from Keal
+    if (not triggers.isEmpty()) {
+        out += "extern func trgHas(which: Int): Bool = \"plkeal_trg_has\"\n"
+        out += "extern func trgIsNull(which: Int, col: Int): Bool = \"plkeal_trg_is_null\"\n"
+        out += "extern func trgStr(which: Int, col: Int): own String = \"plkeal_trg_str\"\n"
+        out += "extern func trgInt(which: Int, col: Int): Int = \"plkeal_trg_int\"\n"
+        out += "extern func trgFloat(which: Int, col: Int): Float = \"plkeal_trg_float\"\n"
+        out += "extern func trgBool(which: Int, col: Int): Bool = \"plkeal_trg_bool\"\n"
+        out += "extern proc trgOut(s: borrow String) = \"plkeal_trg_out\"\n"
+        out += "extern proc trgOutNull() = \"plkeal_trg_out_null\"\n\n"
+        val readers: List<String> = []
+        for (tr in triggers) {
+            unless (readers.contains(tr.table)) {
+                readers.add(tr.table)
+                val t = schema.tables[tr.table]!!
+                out += "func plkealRead${t.name}(which: Int): ${t.name} {\n"
+                var c = 0
+                val names: List<String> = []
+                for (col in t.columns) {
+                    out += "    val c${c}: ${kealType(col.ty())} = ${cellExpr(col.ty(), c).replace("spi", "trg").replace("(i, ", "(which, ")}\n"
+                    names.add("c${c}")
+                    c += 1
+                }
+                out += "    return ${t.name}(${names.join(", ")})\n}\n\n"
+            }
+        }
     }
 
     // ---- the SPI bridge, as seen from Keal
@@ -148,12 +192,45 @@ package func plkealSource(compiler: Compiler): String {
         out += "}\n\n"
     }
 
+    for (tr in triggers) {
+        val t = schema.tables[tr.table]!!
+        val answers = tr.timing == "before" and tr.event != "delete"
+        out += "func plkeal_trg_${tr.name}(): Bool {\n"
+        out += "    plkealError = null\n"
+        out += "    try {\n"
+        if (tr.event != "delete") { out += "        val row = plkealRead${t.name}(0)\n" }
+        if (tr.event != "insert") { out += "        val old = plkealRead${t.name}(1)\n" }
+        val args = when (tr.event) {
+            "insert" -> "row"
+            "update" -> "row, old"
+            else -> "old"
+        }
+        if (answers) {
+            out += "        val out = trg_${tr.name}(${args})\n"
+            for (col in t.columns) {
+                if (col.optional) {
+                    out += "        val v_${col.name} = out.${col.name}\n"
+                    out += "        if (v_${col.name} == null) { trgOutNull() } else { trgOut(\"\" + v_${col.name}) }\n"
+                } else {
+                    out += "        trgOut(\"\" + out.${col.name})\n"
+                }
+            }
+            out += "        return true\n"
+        } else {
+            out += "        trg_${tr.name}(${args})\n"
+            out += "        return false\n"
+        }
+        out += "    } catch (e) { plkealError = e; return false }\n"
+        out += "}\n\n"
+    }
+
     // ---- the C side
     out += "native \"\"\"\n"
     out += "/* The Keal runtime, as the program's main would have set it up. Once per\n"
     out += " * backend, when PostgreSQL loads the library; idempotent on Keal's side. */\n"
     out += "void _PG_init(void) { keal_runtime_init(); }\n\n"
-    if (not queries.isEmpty()) { out += spiBridge(queries) }
+    if (hasSpi) { out += spiBridge(queries) }
+    if (not triggers.isEmpty()) { out += triggerBridge() }
     out += "/* Raises the panic the guard caught, once every Keal frame has returned. */\n"
     out += "static void plkeal_raise(void) {\n"
     out += "    KealStr* m = k_plkealMessage();\n"
@@ -182,12 +259,12 @@ package func plkealSource(compiler: Compiler): String {
             args.add("a${i}")
             i += 1
         }
-        if (not queries.isEmpty()) {
+        if (hasSpi) {
             out += "    if (SPI_connect() != SPI_OK_CONNECT) { elog(ERROR, \"SPI_connect failed\"); }\n"
         }
         out += "    ${cType(s.ret!!)} r = k_plkeal_${s.name}(${args.join(", ")});\n"
         for (r in releases) { out += r }
-        if (not queries.isEmpty()) {
+        if (hasSpi) {
             out += "    plkeal_spi_reset();\n"
             out += "    SPI_finish();\n"
         }
@@ -207,9 +284,99 @@ package func plkealSource(compiler: Compiler): String {
         }
         out += "}\n\n"
     }
+    for (tr in triggers) {
+        val entry = "kealsql_trg_${snakeName(tr.name)}"
+        out += "PG_FUNCTION_INFO_V1(${entry});\n"
+        out += "Datum ${entry}(PG_FUNCTION_ARGS) {\n"
+        out += "    if (!CALLED_AS_TRIGGER(fcinfo)) { elog(ERROR, \"${entry}: not called as a trigger\"); }\n"
+        out += "    TriggerData* td = (TriggerData*) fcinfo->context;\n"
+        out += "    TupleDesc desc = RelationGetDescr(td->tg_relation);\n"
+        out += "    HeapTuple row = NULL;\n    HeapTuple old = NULL;\n"
+        out += "    if (TRIGGER_FIRED_BY_INSERT(td->tg_event)) { row = td->tg_trigtuple; }\n"
+        out += "    else if (TRIGGER_FIRED_BY_UPDATE(td->tg_event)) { row = td->tg_newtuple; old = td->tg_trigtuple; }\n"
+        out += "    else { old = td->tg_trigtuple; }\n"
+        out += "    if (SPI_connect() != SPI_OK_CONNECT) { elog(ERROR, \"SPI_connect failed\"); }\n"
+        out += "    plkeal_trg_load(0, row, desc);\n    plkeal_trg_load(1, old, desc);\n    plkeal_trg_out_reset();\n"
+        out += "    bool produced = k_plkeal_trg_${tr.name}();\n"
+        out += "    HeapTuple result = row ? row : old;\n"
+        out += "    if (!k_plkealFailed() && produced) { result = SPI_copytuple(plkeal_trg_build(desc)); }\n"
+        out += "    plkeal_spi_reset();\n    plkeal_trg_reset();\n    SPI_finish();\n"
+        out += "    if (k_plkealFailed()) { plkeal_raise(); }\n"
+        out += "    PG_RETURN_POINTER(result);\n"
+        out += "}\n\n"
+    }
     out += "\"\"\"\n\n"
     out += "proc main() {}\n"
     return out
+}
+
+/// The C half of the trigger bridge: the row and the old row as text cells,
+/// and the row a `before` trigger answers, built back from text through
+/// each column's input function.
+func triggerBridge(): String {
+    return """#include "commands/trigger.h"
+#include "funcapi.h"
+#include "access/htup_details.h"
+
+#define PLKEAL_TRG_MAXCOLS 256
+static char* plkeal_trg_cells[2][PLKEAL_TRG_MAXCOLS];
+static int plkeal_trg_n[2];
+static bool plkeal_trg_present[2];
+static char* plkeal_trg_out_cells[PLKEAL_TRG_MAXCOLS];
+static int plkeal_trg_out_n;
+
+static void plkeal_trg_load(int which, HeapTuple t, TupleDesc d) {
+    for (int k = 0; k < plkeal_trg_n[which]; k++) { free(plkeal_trg_cells[which][k]); plkeal_trg_cells[which][k] = NULL; }
+    plkeal_trg_n[which] = 0;
+    plkeal_trg_present[which] = (t != NULL);
+    if (t == NULL) { return; }
+    int k = 0;
+    for (int i = 0; i < d->natts && k < PLKEAL_TRG_MAXCOLS; i++) {
+        if (TupleDescAttr(d, i)->attisdropped) { continue; }
+        char* v = SPI_getvalue(t, d, i + 1);
+        plkeal_trg_cells[which][k++] = v ? strdup(v) : NULL;
+        if (v) { pfree(v); }
+    }
+    plkeal_trg_n[which] = k;
+}
+
+static void plkeal_trg_out_reset(void) {
+    for (int k = 0; k < plkeal_trg_out_n; k++) { free(plkeal_trg_out_cells[k]); plkeal_trg_out_cells[k] = NULL; }
+    plkeal_trg_out_n = 0;
+}
+
+static void plkeal_trg_reset(void) {
+    plkeal_trg_load(0, NULL, NULL);
+    plkeal_trg_load(1, NULL, NULL);
+    plkeal_trg_out_reset();
+}
+
+/* The answered row as a tuple: dropped attributes stay null. */
+static HeapTuple plkeal_trg_build(TupleDesc d) {
+    char** vals = palloc0(sizeof(char*) * d->natts);
+    int k = 0;
+    for (int i = 0; i < d->natts; i++) {
+        if (TupleDescAttr(d, i)->attisdropped) { continue; }
+        vals[i] = k < plkeal_trg_out_n ? plkeal_trg_out_cells[k] : NULL;
+        k++;
+    }
+    return BuildTupleFromCStrings(TupleDescGetAttInMetadata(d), vals);
+}
+
+bool plkeal_trg_has(int64_t which) { return which >= 0 && which < 2 && plkeal_trg_present[which]; }
+static const char* plkeal_trg_cell(int64_t which, int64_t col) {
+    if (which < 0 || which >= 2 || col < 0 || col >= plkeal_trg_n[which]) { return NULL; }
+    return plkeal_trg_cells[which][col];
+}
+bool plkeal_trg_is_null(int64_t which, int64_t col) { return plkeal_trg_cell(which, col) == NULL; }
+char* plkeal_trg_str(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return strdup(c ? c : ""); }
+int64_t plkeal_trg_int(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c ? strtoll(c, NULL, 10) : 0; }
+double plkeal_trg_float(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c ? strtod(c, NULL) : 0.0; }
+bool plkeal_trg_bool(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c && c[0] == 't'; }
+void plkeal_trg_out(const char* s) { if (plkeal_trg_out_n < PLKEAL_TRG_MAXCOLS) { plkeal_trg_out_cells[plkeal_trg_out_n++] = strdup(s); } }
+void plkeal_trg_out_null(void) { if (plkeal_trg_out_n < PLKEAL_TRG_MAXCOLS) { plkeal_trg_out_cells[plkeal_trg_out_n++] = NULL; } }
+
+"""
 }
 
 /// `PostsRow` for the query `posts`.
@@ -319,12 +486,12 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
 /// rolled back and handed to Keal as a message rather than thrown through it.
 func spiBridge(queries: List<QueryInfo>): String {
     var out = "#include \"executor/spi.h\"\n#include \"access/xact.h\"\n#include \"utils/memutils.h\"\n#include \"utils/lsyscache.h\"\n#include \"utils/resowner.h\"\n\n"
-    out += "#define PLKEAL_NQ ${queries.size}\n"
+    out += "#define PLKEAL_NQ ${queries.size.max(1)}\n"
     out += "#define PLKEAL_MAXARGS 32\n"
     out += "static const char* plkeal_sql[PLKEAL_NQ] = {\n"
     for (q in queries) { out += "    \"${cEscape(q.sql)}\",\n" }
     out += "};\n"
-    out += "static const int plkeal_nargs[PLKEAL_NQ] = { ${queries.map({ "" + it.params.size }).join(", ")} };\n"
+    out += "static const int plkeal_nargs[PLKEAL_NQ] = { ${queries.map({ "" + it.params.size }).join(", ")}${if (queries.isEmpty()) { "0" } else { "" }} };\n"
     out += "static const char* plkeal_argtypes[PLKEAL_NQ][PLKEAL_MAXARGS] = {\n"
     for (q in queries) { out += "    { ${q.params.map({ "\"" + it.sqlType + "\"" }).join(", ")} },\n" }
     out += "};\n"
@@ -472,8 +639,8 @@ package func plkealBuildScript(stem: String): String {
 
 /// Writes DIR/<stem>.keal and DIR/build.sh; answers what it wrote.
 package func writePlkeal(compiler: Compiler, dir: String): List<String> {
-    if (compiler.program.stored.isEmpty()) {
-        println("error: ${compiler.file} declares no stored function")
+    if (compiler.program.stored.isEmpty() and compiler.program.triggers.isEmpty()) {
+        println("error: ${compiler.file} declares no stored function and no trigger")
         exit(1)
     }
     unless (makeDir(dir)) {

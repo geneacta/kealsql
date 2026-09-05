@@ -35,6 +35,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
 | `view` | before a name: `view Name { pipeline }` |
+| `trigger` `on` `before` `after` | `trigger name on Table before|after insert|update|delete { ...Keal... }` |
 | `as` | `Table as t` in `from` / `join`; `expr as name` in `select` |
 
 **Nothing else is reserved.** `from`, `where`, `select`, `join`, `orderBy`,
@@ -46,7 +47,7 @@ too. A column may be called `select` if its author insists.
 
 ```
 File          = Item* ;
-Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl ;
+Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl ;
 ViewDecl      = "view" Ident "{" Pipeline "}" ;          (* ends in select, names its columns *)
 
 Import        = "import" String ( "as" Ident )? ;
@@ -256,6 +257,7 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 | `insert(R(…)).onConflict(k).update(a = excluded.a)` | `ON CONFLICT (k) DO UPDATE SET a = EXCLUDED.a` |
 | `insert(R(…)).onConflict(k).ignore()` | `ON CONFLICT (k) DO NOTHING` |
 | `sql("SELECT …")` | as written |
+| `trigger t on T before insert { … }` | `CREATE OR REPLACE FUNCTION kealsql_trg_t() RETURNS trigger …; CREATE OR REPLACE TRIGGER t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION kealsql_trg_t()` |
 | `view V { … }` | `CREATE VIEW v AS SELECT …; COMMENT ON VIEW v IS 'kealsql:<fingerprint>'` |
 | `val t = recursive(base, step)` | `WITH RECURSIVE t(cols) AS (base UNION ALL step)` before the statement |
 | `insertInto(T, q)` | `INSERT INTO t (cols) SELECT …` |
@@ -283,6 +285,17 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 StoredDecl    = "stored" "pure"? "func" Ident "(" Params? ")" ":" ScalarType KealBody ;
 KealBody      = "{" ... "}" ;                              (* Keal, verbatim, to the matching brace *)
 ```
+
+```
+TriggerDecl   = "trigger" Ident "on" Ident ( "before" | "after" ) ( "insert" | "update" | "delete" ) KealBody ;
+```
+
+A trigger's body is Keal with the row in scope as the table's record:
+`row` for an insert or an update (the row being written), `old` for an
+update or a delete (the one it replaces). A `before insert` or `before
+update` body *answers* the row to store — `row`, or `row.with(col = …)` —
+and a `throw` refuses the write with its message as the SQL error; the
+other bodies answer nothing. Every body may run the file's queries.
 
 The signature is KealSql's — `Int`, `Float`, `Bool` or `String`, none
 optional, no `String(n)` — and the body is Keal's: the parser finds the

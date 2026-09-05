@@ -1,0 +1,43 @@
+// Triggers: Keal that runs on every row written.
+
+table Product {
+    id:      Id
+    sku:     Slug
+    price:   Decimal(10, 2)
+    stock:   Int = 0
+    updates: Int = 0
+    note:    String?
+}
+
+table Audit {
+    id:     Id
+    sku:    String
+    change: String
+}
+
+proc log(sku: String, change: String) {
+    insert(Audit(sku = sku, change = change))
+}
+
+func audits(): List<(String, String)> {
+    from(Audit).orderBy(id).select(sku, change)
+}
+
+// A before trigger answers the row to store.
+trigger normalizeSku on Product before insert {
+    return row.with(sku = row.sku.toUpper(), note = row.note ?: "new")
+}
+
+trigger countUpdates on Product before update {
+    if (row.stock < 0) { throw "stock below zero for " + row.sku }
+    return row.with(updates = old.updates + 1)
+}
+
+// An after trigger runs the file's queries.
+trigger auditInsert on Product after insert {
+    log(row.sku, "inserted at " + row.price)
+}
+
+trigger auditDelete on Product after delete {
+    log(old.sku, "deleted with " + old.updates + " updates")
+}

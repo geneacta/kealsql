@@ -105,7 +105,15 @@ package class Ex(package val kind: String, package val line: Int, package val co
 /// `view Name { pipeline }`: a query with a name in the database.
 package class ViewN(package val name: String, package val body: Ex, package val line: Int, package val col: Int)
 
+/// `trigger name on Table before|after insert|update|delete { ...Keal... }`.
+package class TriggerN(package val name: String, package val table: String, package val line: Int, package val col: Int) {
+    package var timing: String = ""          // before / after
+    package var event: String = ""           // insert / update / delete
+    package var body: String = ""
+}
+
 package class ProgramN() {
+    package var triggers: List<TriggerN> = []
     package var views: List<ViewN> = []
     package var imports: List<String> = []
     package var enums: List<EnumN> = []

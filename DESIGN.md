@@ -95,6 +95,15 @@ has returned. The rule below, held in both directions. The suite checks
 both: a caught query error stays inside, an uncaught one is a SQL error
 with the write rolled back, and the backend lives on.
 
+**Triggers** ride the same bridge: `trigger name on Table before|after
+insert|update|delete { … }` is a Keal body with `row` and `old` as the
+table's record, read from the trigger's tuples as text; a `before` body
+answers the row to store (`row.with(col = …)`), built back into a tuple
+through each column's input function, and a `throw` is the SQL error that
+refuses the write. Columns are matched by position with dropped attributes
+skipped, which holds as long as columns are only ever appended — the
+migration's `ADD COLUMN` does that, and a `renamed` keeps the position.
+
 Cost to state: a subtransaction per query call — what PL/pgSQL pays for an
 exception block, paid here on every call. The alternative, an error that
 `longjmp`s through Keal, is the thing the rule forbids.

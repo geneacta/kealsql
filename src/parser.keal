@@ -141,6 +141,8 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 this.skipSemis()
                 this.expect("}", "to close the view")
                 p.views.add(ViewN(name, body, t.line, t.col))
+            } else if (this.atWord("trigger") and this.peekAt(1).kind == "ident") {
+                p.triggers.add(this.triggerDecl())
             } else if (this.atWord("stored") and (this.peekAt(1).kind == "func" or this.peekAt(1).kind == "proc" or (this.peekAt(1).kind == "ident" and this.peekAt(1).text == "pure"))) {
                 p.stored.add(this.storedDecl())
             } else if (this.at("func")) {
@@ -306,6 +308,29 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
         this.expect(":", "before a stored function's result type")
         s.ret = this.typeExpr()
         if (not this.at("{")) { this.failHere("expected `{` to open the body, found ${describeToken(this.peek())}") }
+        s.body = this.rawBody()
+        return s
+    }
+
+    /// `trigger name on Table before|after insert|update|delete { ...Keal... }`.
+    func triggerDecl(): TriggerN {
+        val t = this.advance()                                 // `trigger`
+        val name = this.expectIdent("a name after `trigger`")
+        unless (this.atWord("on")) { this.failHere("expected `on Table` after the trigger's name") }
+        this.advance()
+        val table = this.expectIdent("a table after `on`")
+        val tr = TriggerN(name, table, t.line, t.col)
+        if (this.atWord("before") or this.atWord("after")) { tr.timing = this.advance().text }
+        else { this.failHere("expected `before` or `after`") }
+        if (this.atWord("insert") or this.atWord("update") or this.atWord("delete")) { tr.event = this.advance().text }
+        else { this.failHere("expected `insert`, `update` or `delete`") }
+        if (not this.at("{")) { this.failHere("expected `{` to open the trigger's body, found ${describeToken(this.peek())}") }
+        tr.body = this.rawBody()
+        return tr
+    }
+
+    /// The text between the `{` ahead and its matching `}`, both consumed.
+    func rawBody(): String {
         val open = this.advance()
         var depth = 1
         while (depth > 0) {
@@ -315,8 +340,7 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
             if (k == "}") { depth -= 1 }
         }
         val close = this.toks[this.pos - 1]
-        s.body = this.source.substring(this.offsetOf(open.line, open.col) + 1, this.offsetOf(close.line, close.col))
-        return s
+        return this.source.substring(this.offsetOf(open.line, open.col) + 1, this.offsetOf(close.line, close.col))
     }
 
     /// The character offset of a token: the lexer counts columns in bytes.

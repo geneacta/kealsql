@@ -103,9 +103,19 @@ func slugs(): List<(String, String)> {
 }
 ```
 
+A `trigger` is the same, on every row written — `row` and `old` are the
+table's record, a `before` body answers the row to store, a `throw`
+refuses the write:
+
+```
+trigger normalizeSku on Product before insert {
+    return row.with(sku = row.sku.toUpper())
+}
+```
+
 `--plkeal` writes the Keal program and a `build.sh` (Keal to C, then the C
 compiler against the server headers); the file's SQL carries the
-`CREATE FUNCTION`s. A panic inside becomes a SQL error, and the backend
+`CREATE FUNCTION`s and `CREATE TRIGGER`s. A panic inside becomes a SQL error, and the backend
 lives on. Values are `Int`, `Float`, `Bool`, `String`; the functions are
 STRICT, so a null answers null without a call.
 
@@ -176,8 +186,8 @@ of several rows with `onConflict`, `insertInto` from a query, `update` /
 connectives with Kleene's tables on `Bool3`, and reference paths as
 implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
-functions in Keal compiled to `LANGUAGE C`, calling the file's queries
-through SPI with typed results — all of it compiled natively as well as
-run on the VM.
+functions and triggers in Keal compiled to `LANGUAGE C`, calling the
+file's queries through SPI with typed results — all of it compiled
+natively as well as run on the VM.
 
 Licensed under Apache-2.0, like Keal.

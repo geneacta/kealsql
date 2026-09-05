@@ -99,6 +99,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         for (name in this.schema.tableOrder) { this.resolveTableRules(this.schema.tables[name]!!) }
         for (v in this.program.views) { this.resolveView(v) }
         for (s in this.program.stored) { this.checkStored(s) }
+        for (tr in this.program.triggers) {
+            if (this.program.triggers.filter({ it.name == tr.name }).size > 1) { this.fail(tr.line, tr.col, "trigger `${tr.name}` is declared twice") }
+            val t = this.schema.tables[tr.table]
+            if (t == null) { this.fail(tr.line, tr.col, "`${tr.table}` is not a table") }
+            if (t.isView) { this.fail(tr.line, tr.col, "`${tr.table}` is a view; a trigger is on a table") }
+        }
     }
 
     /// A view is a query with a name: its columns are the select's, named
@@ -238,6 +244,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     package func storedDdl(): String {
         var out = ""
+        for (tr in this.program.triggers) {
+            val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
+            val fn = "kealsql_trg_${snakeName(tr.name)}"
+            out += "CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger\n    AS '${lib}', '${fn}' LANGUAGE C;\n"
+            out += "CREATE OR REPLACE TRIGGER ${sqlName(tr.name)} ${tr.timing.toUpper()} ${tr.event.toUpper()} ON ${sqlName(tr.table)}\n    FOR EACH ROW EXECUTE FUNCTION ${fn}();\n\n"
+        }
         for (s in this.program.stored) {
             val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
             val params = s.params.map({ this.storedSqlType(it.ty) }).join(", ")
