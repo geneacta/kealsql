@@ -64,7 +64,7 @@ func powerOf(kind: String): Int {
 /// ordinary names everywhere else — Keal's rule for `record` and `weak`.
 func isModifier(w: String): Bool {
     return when (w) {
-        "primary", "slug", "unique", "cascade", "restrict", "setNull" -> true
+        "primary", "slug", "unique", "cascade", "restrict", "setNull", "indexed" -> true
         else -> false
     }
 }
@@ -169,6 +169,17 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
         while (not this.at("}")) {
             if (this.atWord("unique") and this.peekAt(1).kind == "(") {
                 tab.uniques.add(this.uniqueConstraint())
+            } else if (this.atWord("index") and this.peekAt(1).kind == "(") {
+                tab.indexes.add(this.columnList("index"))
+            } else if (this.atWord("check") and this.peekAt(1).kind == "ident" and this.peekAt(2).kind == "(") {
+                val t = this.advance()
+                val name = this.advance().text
+                this.expect("(", "after the check's name")
+                val ex = this.expr()
+                this.expect(")", "to close the check")
+                tab.checks.add(CheckN(name, ex, t.line, t.col))
+            } else if (this.atWord("check")) {
+                this.failHere("a check has a name: `check nonNegative(stock >= 0)`")
             } else {
                 tab.columns.add(this.column())
             }
@@ -181,15 +192,22 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
     }
 
     func uniqueConstraint(): List<String> {
-        val t = this.advance()                                 // `unique`
-        this.expect("(", "after `unique`")
-        val names: List<String> = []
-        names.add(this.expectIdent("a column name"))
-        while (this.eat(",")) { names.add(this.expectIdent("a column name")) }
-        this.expect(")", "to close `unique(`")
+        val t = this.peek()
+        val names = this.columnList("unique")
         if (names.size < 2) {
             this.fail(t.line, t.col, "`unique(...)` on one column is written as a modifier: `unique ${names[0]}: ...`")
         }
+        return names
+    }
+
+    /// `word(a, b, ...)`: the column names.
+    func columnList(word: String): List<String> {
+        this.advance()
+        this.expect("(", "after `${word}`")
+        val names: List<String> = []
+        names.add(this.expectIdent("a column name"))
+        while (this.eat(",")) { names.add(this.expectIdent("a column name")) }
+        this.expect(")", "to close `${word}(`")
         return names
     }
 
@@ -222,6 +240,7 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
         val c = ColumnN(name, this.typeExpr(), t.line, t.col)
         c.mods = mods
         c.renamedFrom = renamedFrom
+        if (this.eat("=")) { c.default = this.expr() }
         return c
     }
 
@@ -359,6 +378,16 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                         if (not this.at("int")) { this.failHere("expected a length inside `String(`") }
                         ty.len = this.advance().text.toInt() ?: 0
                         this.expect(")", "to close `String(`")
+                    }
+                }
+                "Decimal" -> {
+                    if (this.eat("(")) {
+                        if (not this.at("int")) { this.failHere("expected a precision inside `Decimal(`") }
+                        ty.len = this.advance().text.toInt() ?: 0
+                        this.expect(",", "between precision and scale: `Decimal(10, 2)`")
+                        if (not this.at("int")) { this.failHere("expected a scale inside `Decimal(`") }
+                        ty.scale = this.advance().text.toInt() ?: 0
+                        this.expect(")", "to close `Decimal(`")
                     }
                 }
                 else -> {}

@@ -56,17 +56,22 @@ resolved relative to the importing file, loaded once — Keal's rule.
 ## 3. Schema
 
 ```
-TableDecl     = Renamed? "table" Ident "{" ( Column | TableConstraint )* "}" ;
-Column        = ( Modifier | Renamed )* Ident ":" Type ;
+TableDecl     = Renamed? "table" Ident "{" ( Column | TableRule )* "}" ;
+Column        = ( Modifier | Renamed )* Ident ":" Type ( "=" Expr )? ;   (* `= expr`: the DEFAULT *)
 Renamed       = "renamed" "(" Ident ")" ;                 (* the previous name, for the migration *)
-Modifier      = "primary" | "slug" | "unique" | "cascade" | "restrict" | "setNull" ;
-TableConstraint = "unique" "(" Ident ( "," Ident )+ ")" ;
+Modifier      = "primary" | "slug" | "unique" | "indexed" | "cascade" | "restrict" | "setNull" ;
+TableRule     = "unique" "(" Ident ( "," Ident )+ ")"
+              | "index" "(" Ident ( "," Ident )* ")"
+              | "check" Ident "(" Expr ")" ;              (* named; the expression is over the table's columns *)
 
 Type          = ( ScalarType | RefType ) "?"? ;
 ScalarType    = "Id" | "Slug" | "Serial" | "BigSerial"
               | "Int" | "BigInt" | "Float" | "Bool"
+              | "Decimal" ( "(" Integer "," Integer ")" )?
               | "String" ( "(" Integer ")" )?
-              | "Uuid" | "Bytea" | "Date" | "Timestamp"
+              | "Uuid" | "Bytea" | "Date" | "Time" | "Timestamp" | "Timestamptz"
+              | "Interval" | "Json" | "Jsonb" | "Inet"
+              | "List" "<" ScalarType ">"                  (* an array column: integer[] *)
               | Ident ;                                   (* an enum *)
 RefType       = "RefId"   "<" Ident ">"
               | "RefSlug" "<" Ident ">"
@@ -87,6 +92,9 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `primary`, `slug`, `unique` exclude one another on a column | two on one column |
 | `slug` column is `String` or `String(n)` | any other type |
 | `primary` and `slug` columns are not `?` | `?` present |
+| a default is a value of the column's type — a literal, `now()`, `today()`, `uuid()`, an array | a column, or another type |
+| a check is a `Bool` over the table's own columns | any other type, or a reference path |
+| `indexed` is not written on a key column | it is |
 | `RefId<T>` requires `T` to declare an `Id` | `T` used `primary … : X` — the message says `Ref<T.col>` |
 | `RefSlug<T>` requires `T` to declare a `Slug` | `T` used `slug … : X` |
 | `Ref<T.c>` requires `c` to be `primary`, `slug` or `unique` in `T` | otherwise |
@@ -114,6 +122,11 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `cascade author: RefId<User>` | `… ON DELETE CASCADE` |
 | `by: RefSlug<User>` | `by text NOT NULL REFERENCES user(name) ON DELETE RESTRICT ON UPDATE CASCADE` |
 | `enum Suit { Hearts, Spades }` | `CREATE TYPE suit AS ENUM ('Hearts', 'Spades')` |
+| `price: Decimal(10, 2) = 0` | `price numeric(10, 2) NOT NULL DEFAULT 0` |
+| `created: Timestamptz = now()` | `created timestamptz NOT NULL DEFAULT now()` |
+| `tags: List<String>` | `tags text[] NOT NULL` |
+| `indexed stock: Int` / `index(a, b)` | `CREATE INDEX item_stock_idx ON item (stock)` / `item_a_b_idx` |
+| `check inStock(stock >= 0)` | `CONSTRAINT item_in_stock_check CHECK (stock >= 0)` |
 | `Ref<T.c>` column | the type of `c`; `REFERENCES t(c)` |
 
 **Naming.** Identifiers are emitted in `snake_case`, unquoted: `fullName` →
@@ -298,6 +311,10 @@ left join, and the type of the result says which happened.
 | `x in fragment.select(c)` | same (`IN (SELECT …)`) |
 | `s.like(p)`, `s.ilike(p)` | `Bool` / `Bool3` (`LIKE` / `ILIKE`) |
 | `s.lower()`, `s.upper()`, `s.length()`, `s.trim()` | `String` / `Int`, `?`-preserving |
+| `["a", "b"]` | `String[]` (`ARRAY['a', 'b']`); an empty `[]` takes the type of the column or parameter it is given to |
+| `xs.size()`, `xs.has(v)` on an array | `Int` (`cardinality`), `Bool` / `Bool3` (`v = ANY(xs)`) |
+| `now()`, `today()`, `uuid()` | `Timestamptz`, `Date`, `Uuid` |
+| `+ - * / %` with a `Decimal` | `Decimal` |
 | `count(*)`, `count(c)`, `sum(c)`, `avg(c)`, `min(c)`, `max(c)` | aggregates; `sum`/`avg`/`min`/`max` of an empty group are `T?` |
 | `a <==> b` | `Bool`, "does the order separate them" — an `Ord` question, kept for symmetry with Keal; rarely useful in SQL |
 

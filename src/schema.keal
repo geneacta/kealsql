@@ -24,6 +24,9 @@ package class Column(package val name: String, package val decl: ColumnN) {
     package var onDelete: String = ""        // RESTRICT / CASCADE / SET NULL
     package var onUpdate: String = ""        // CASCADE for a slug reference
     package var len: Int = 0
+    package var scale: Int = 0
+    package var default: String = ""         // SQL of the declared default; "" for none
+    package var indexed: Bool = false
 
     package func ty(): Ty { Ty(this.scalar, this.optional) }
 }
@@ -51,18 +54,40 @@ package class Schema() {
     }
 }
 
-/// The SQL type a scalar is stored or declared as.
+/// The value types a column, a parameter or a result may have.
+package func isScalarName(name: String): Bool {
+    return when (name) {
+        "Int", "BigInt", "Float", "Decimal", "Bool", "String", "Uuid", "Bytea",
+        "Date", "Time", "Timestamp", "Timestamptz", "Interval", "Json", "Jsonb", "Inet" -> true
+        else -> false
+    }
+}
+
+/// The SQL type a scalar is stored or declared as. An array scalar is
+/// spelled `Elem[]`, as SQL spells it.
 package func sqlType(scalar: String, len: Int, schema: Schema): String {
+    return sqlTypeScaled(scalar, len, 0, schema)
+}
+
+package func sqlTypeScaled(scalar: String, len: Int, scale: Int, schema: Schema): String {
+    if (scalar.endsWith("[]")) { return sqlTypeScaled(scalar.take(scalar.length - 2), len, scale, schema) + "[]" }
     return when (scalar) {
         "Int" -> "integer"
         "BigInt" -> "bigint"
         "Float" -> "double precision"
+        "Decimal" -> if (len > 0) { "numeric(${len}, ${scale})" } else { "numeric" }
         "Bool" -> "boolean"
         "String" -> if (len > 0) { "varchar(${len})" } else { "text" }
         "Uuid" -> "uuid"
         "Bytea" -> "bytea"
         "Date" -> "date"
+        "Time" -> "time"
         "Timestamp" -> "timestamp"
+        "Timestamptz" -> "timestamptz"
+        "Interval" -> "interval"
+        "Json" -> "json"
+        "Jsonb" -> "jsonb"
+        "Inet" -> "inet"
         else -> if (schema.isEnum(scalar)) { sqlName(scalar) } else { scalar.toLower() }
     }
 }

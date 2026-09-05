@@ -5,18 +5,23 @@
 
 package class LiveColumn(package val name: String, package val ty: String, package val notNull: Bool, package val default: String)
 
-/// kind: "p" primary key, "u" unique, "f" foreign key. Actions are the
-/// catalog's letters: a no action, r restrict, c cascade, n set null.
+/// kind: "p" primary key, "u" unique, "f" foreign key, "c" check. Actions
+/// are the catalog's letters: a no action, r restrict, c cascade, n set null.
 package class LiveConstraint(package val kind: String, package val name: String, package val cols: List<String>) {
     package var refTable: String = ""
     package var refCols: List<String> = []
     package var onDelete: String = "a"
     package var onUpdate: String = "a"
+    package var def: String = ""             // a check's definition, as pg_get_constraintdef prints it
 }
+
+/// A plain index — not one a key or a unique constraint owns.
+package class LiveIndex(package val name: String, package val cols: List<String>)
 
 package class LiveTable(package val name: String) {
     package var columns: List<LiveColumn> = []
     package var constraints: List<LiveConstraint> = []
+    package var indexes: List<LiveIndex> = []
 
     package func column(name: String): LiveColumn? { this.columns.find({ it.name == name }) }
 }
@@ -43,15 +48,22 @@ FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
 WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum;
 SELECT 'K', c.relname, k.contype, k.conname,
-       (SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.conkey) WITH ORDINALITY x(attnum, ord)
-          JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = x.attnum),
+       coalesce((SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.conkey) WITH ORDINALITY x(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = x.attnum), ''),
        coalesce(r.relname, ''),
        coalesce((SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.confkey) WITH ORDINALITY x(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = x.attnum), ''),
-       k.confdeltype, k.confupdtype
+       k.confdeltype, k.confupdtype,
+       CASE WHEN k.contype = 'c' THEN pg_get_constraintdef(k.oid) ELSE '' END
 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
-WHERE k.contype IN ('p', 'u', 'f') AND c.relnamespace = 'public'::regnamespace
+WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'public'::regnamespace
 ORDER BY c.relname, k.conname;
+SELECT 'I', c.relname, i.relname,
+       (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
+FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_class i ON i.oid = x.indexrelid
+WHERE c.relnamespace = 'public'::regnamespace AND NOT x.indisprimary AND NOT x.indisunique
+ORDER BY c.relname, i.relname;
 """
 
 /// The `psql` invocation. `db` is `-d`'s argument, or "" to let the
@@ -103,13 +115,18 @@ package func parseLive(text: String): Live {
             "K" -> {
                 val t = live.tables[f[1]]
                 if (t != null) {
-                    val k = LiveConstraint(f[2], f[3], f[4].split(","))
+                    val k = LiveConstraint(f[2], f[3], if (f[4] == "") { [] } else { f[4].split(",") })
                     k.refTable = f[5]
                     k.refCols = if (f[6] == "") { [] } else { f[6].split(",") }
                     k.onDelete = f[7]
                     k.onUpdate = f[8]
+                    if (f.size > 9) { k.def = f[9] }
                     t.constraints.add(k)
                 }
+            }
+            "I" -> {
+                val t = live.tables[f[1]]
+                if (t != null) { t.indexes.add(LiveIndex(f[2], f[3].split(","))) }
             }
             else -> {}
         }

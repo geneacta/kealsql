@@ -373,6 +373,13 @@ parentheses.
   `renamed(Post) table Article { … }`. The migration renames; once the
   database is renamed the annotation is a note ("can go") and nothing else,
   so leaving it in for a while costs nothing.
+* Defaults are compared after removing the casts the catalog adds and
+  changed with `SET DEFAULT` / `DROP DEFAULT`; indexes are matched by
+  their columns; checks by their name — a changed expression under the
+  same name is not seen, so a changed check is renamed to be re-created.
+  A `NOT NULL` column with a default is added without ceremony: the
+  database fills it. Widening `numeric(p, s)` to `numeric(q ≥ p, s)` is
+  safe, like `varchar(n)` to `varchar(m ≥ n)` and `integer` to `bigint`.
 * The suite applies each test migration in one transaction and runs the
   diff again: it must then print nothing but the notes.
 * **Names.** A parameter shadows a column of the same name, as an inner

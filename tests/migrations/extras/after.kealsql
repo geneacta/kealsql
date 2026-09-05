@@ -1,0 +1,11 @@
+table Item {
+    id:      Id
+    name:    Slug
+    price:   Decimal(12, 2) = 1
+    indexed stock: Int
+    active:  Bool = true
+    tags:    List<String> = []
+    created: Timestamptz = now()
+    check inStock(stock >= 0)
+    check priced(price > 0)
+}

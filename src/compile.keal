@@ -11,6 +11,7 @@ import "./schema.keal"
 /// only and never resolve a bare column name.
 package class Src(package val alias: String, package val table: Table) {
     package var sqlAlias: String = ""
+    package var bare: Bool = false           // columns emitted unqualified: a CHECK, a DEFAULT
     package var implicit: Bool = false
     package var optional: Bool = false       // reached by a LEFT JOIN
     package var joinSql: String = ""         // "" for the from table
@@ -90,7 +91,65 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         // Columns first, references second: a reference needs its target's columns.
         for (name in this.schema.tableOrder) { this.resolveColumns(this.schema.tables[name]!!) }
         for (name in this.schema.tableOrder) { this.resolveReferences(this.schema.tables[name]!!) }
+        for (name in this.schema.tableOrder) { this.resolveTableRules(this.schema.tables[name]!!) }
         for (s in this.program.stored) { this.checkStored(s) }
+    }
+
+    /// Defaults, checks and indexes: expressions over the table's own columns.
+    proc resolveTableRules(var table: Table) {
+        val plan = Plan()
+        val src = Src(table.name, table)
+        src.sqlAlias = sqlName(table.name)
+        src.bare = true
+        plan.sources.add(src)
+        this.params = []
+        for (col in table.columns) {
+            val d = col.decl.default
+            if (d == null) { continue }
+            if (col.isSerial) { this.fail(d.line, d.col, "`${col.name}` is assigned by the database; it takes no default") }
+            val v = this.emitAs(d, Plan(), col.ty())
+            if (v.col != null) { this.fail(d.line, d.col, "a default is a value, not a column") }
+            this.checkAssignable(d, v, col)
+            col.default = v.sql
+        }
+        val names: List<String> = []
+        for (ch in table.decl.checks) {
+            if (names.contains(ch.name)) { this.fail(ch.line, ch.col, "check `${ch.name}` is declared twice") }
+            names.add(ch.name)
+            val v = this.emit(ch.ex, plan)
+            if (v.ty.name != "Bool" and v.ty.name != "Bool3") { this.fail(ch.line, ch.col, "a check is a `Bool`, not `${this.renderTy(v.ty)}`") }
+            if (plan.sources.size > 1) { this.fail(ch.line, ch.col, "a check cannot reach through a reference") }
+        }
+        for (ix in table.decl.indexes) {
+            for (n in ix) {
+                if (table.column(n) == null) { this.fail(table.decl.line, table.decl.col, "`index(${ix.join(", ")})` names `${n}`, which `${table.name}` has no column of") }
+            }
+        }
+    }
+
+    /// `CHECK` SQL for a check, with bare column names.
+    package func checkSql(table: Table, ch: CheckN): String {
+        val plan = Plan()
+        val src = Src(table.name, table)
+        src.sqlAlias = sqlName(table.name)
+        src.bare = true
+        plan.sources.add(src)
+        this.params = []
+        return this.emit(ch.ex, plan).sql
+    }
+
+    /// The indexes a table asks for, each as its columns: `indexed` ones, then `index(a, b)`s.
+    package func indexesOf(table: Table): List<List<String>> {
+        val out: List<List<String>> = []
+        for (c in table.columns) { if (c.indexed) { out.add([c.name]) } }
+        for (ix in table.decl.indexes) { out.add(ix) }
+        return out
+    }
+
+    package func indexDdl(table: Table, cols: List<String>): String {
+        val tn = snakeName(table.name)
+        val cn = cols.map({ snakeName(it) })
+        return "CREATE INDEX ${tn}_${cn.join("_")}_idx ON ${sqlName(table.name)} (${cn.map({ quoteIf(it) }).join(", ")});"
     }
 
     /// A stored function's signature: the four value types, none optional —
@@ -147,6 +206,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             val col = Column(c.name, c)
             col.optional = c.ty.optional
             col.len = c.ty.len
+            col.scale = c.ty.scale
+            col.indexed = c.has("indexed")
             for (m in c.mods) {
                 if (c.mods.filter({ it == m }).size > 1) { this.fail(c.line, c.col, "`${m}` is written twice") }
             }
@@ -158,13 +219,21 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 "Slug" -> { col.scalar = "String"; col.isSlug = true; table.hasSlug = true }
                 "Serial" -> { col.scalar = "Int"; col.isSerial = true }
                 "BigSerial" -> { col.scalar = "BigInt"; col.isSerial = true }
-                "Int", "BigInt", "Float", "Bool", "String", "Uuid", "Bytea", "Date", "Timestamp" -> { col.scalar = c.ty.name }
                 "RefId" -> { col.scalar = "Int"; col.refTable = c.ty.refTable }
                 "RefSlug" -> { col.scalar = "String"; col.refTable = c.ty.refTable }
                 "Ref" -> { col.refTable = c.ty.refTable; col.refColumn = c.ty.refColumn }
-                "List", "tuple" -> { this.fail(c.line, c.col, "a column cannot be a `${c.ty.render()}`") }
+                "tuple" -> { this.fail(c.line, c.col, "a column cannot be a `${c.ty.render()}`") }
+                "List" -> {
+                    // An array column: `List<Int>` is `integer[]`. One level; the element is a scalar or an enum.
+                    val elem = c.ty.args[0]
+                    unless (isScalarName(elem.name) or this.schema.isEnum(elem.name)) { this.fail(elem.line, elem.col, "an array holds scalars or an enum, not `${elem.render()}`") }
+                    if (elem.optional) { this.fail(elem.line, elem.col, "the elements of an array column are not optional; the column may be") }
+                    col.scalar = elem.name + "[]"
+                    col.len = elem.len
+                    col.scale = elem.scale
+                }
                 else -> {
-                    if (this.schema.isEnum(c.ty.name)) { col.scalar = c.ty.name }
+                    if (isScalarName(c.ty.name) or this.schema.isEnum(c.ty.name)) { col.scalar = c.ty.name }
                     else { this.fail(c.line, c.col, "`${c.ty.name}` is not a type or an enum") }
                 }
             }
@@ -192,6 +261,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 if (table.slug != null) { this.fail(c.line, c.col, "`${table.name}` already has a slug: `${table.slug!!.name}`") }
                 table.slug = col
             }
+            if (col.indexed and (isKey or col.isPrimary or col.isSlug or col.isUnique)) { this.fail(c.line, c.col, "a key column is indexed already; drop `indexed`") }
             val onDel = c.mods.filter({ it == "cascade" or it == "restrict" or it == "setNull" })
             if (onDel.size > 1) { this.fail(c.line, c.col, "`${onDel[0]}` and `${onDel[1]}`: one rule for delete, not two") }
             if (onDel.size == 1 and col.refTable == "") { this.fail(c.line, c.col, "`${onDel[0]}` only means something on a reference") }
@@ -286,19 +356,23 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             val lines: List<String> = []
             for (c in t.columns) { lines.add("    " + this.columnDdl(c)) }
             for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
-            out += lines.join(",\n") + "\n);\n\n"
+            for (ch in t.decl.checks) { lines.add("    CONSTRAINT ${snakeName(t.name)}_${snakeName(ch.name)}_check CHECK (${this.checkSql(t, ch)})") }
+            out += lines.join(",\n") + "\n);\n"
+            for (ix in this.indexesOf(t)) { out += this.indexDdl(t, ix) + "\n" }
+            out += "\n"
         }
         return out
     }
 
     package func columnDdl(c: Column): String {
         var s = sqlName(c.name) + " "
-        s += if (c.isSerial) { if (c.scalar == "BigInt") { "bigserial" } else { "serial" } } else { sqlType(c.scalar, c.len, this.schema) }
+        s += if (c.isSerial) { if (c.scalar == "BigInt") { "bigserial" } else { "serial" } } else { sqlTypeScaled(c.scalar, c.len, c.scale, this.schema) }
         if (c.isPrimary) { s += " PRIMARY KEY" }
         else {
             if (c.isSlug or c.isUnique) { s += " UNIQUE" }
             if (not c.optional) { s += " NOT NULL" }
         }
+        if (c.default != "") { s += " DEFAULT ${c.default}" }
         if (c.refTable != "") {
             s += " REFERENCES ${sqlName(c.refTable)}(${sqlName(c.refColumn)}) ON DELETE ${c.onDelete}"
             if (c.onUpdate != "") { s += " ON UPDATE ${c.onUpdate}" }
@@ -311,13 +385,18 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     /// The scalar a parameter or result type names; "" when it names none.
     func tyOf(t: TypeN): Ty {
         val name = when (t.name) {
-            "Int", "BigInt", "Float", "Bool", "String", "Uuid", "Bytea", "Date", "Timestamp" -> t.name
             "Id", "Slug", "Serial", "BigSerial" -> this.fail(t.line, t.col, "`${t.name}` is a column type; a value of it is `${if (t.name == "Slug") { "String" } else { "Int" }}`")
+            "List" -> {
+                val elem = t.args[0]
+                unless (isScalarName(elem.name) or this.schema.isEnum(elem.name)) { this.fail(elem.line, elem.col, "an array holds scalars or an enum, not `${elem.render()}`") }
+                elem.name + "[]"
+            }
             "RefId" -> { this.checkRefParam(t); "Int" }
             "RefSlug" -> { this.checkRefParam(t); "String" }
             "Ref" -> { this.checkRefParam(t); this.schema.tables[t.refTable]!!.column(t.refColumn)!!.scalar }
             else -> {
-                if (this.schema.isEnum(t.name)) { t.name }
+                if (isScalarName(t.name)) { t.name }
+                else if (this.schema.isEnum(t.name)) { t.name }
                 else if (this.schema.tables.containsKey(t.name)) { "row:${t.name}" }
                 else { this.fail(t.line, t.col, "`${t.name}` is not a type") }
             }
@@ -335,7 +414,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     func sqlTypeOf(ty: Ty): String { sqlType(ty.name, 0, this.schema) }
 
-    func isNumeric(ty: Ty): Bool { ty.name == "Int" or ty.name == "BigInt" or ty.name == "Float" }
+    func isNumeric(ty: Ty): Bool { ty.name == "Int" or ty.name == "BigInt" or ty.name == "Float" or ty.name == "Decimal" }
 
     func sameType(a: Ty, b: Ty): Bool { a.name == b.name or (this.isNumeric(a) and this.isNumeric(b)) }
 
@@ -740,8 +819,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             cols.add(sqlName(a.name))
             vals.add(v.sql)
         }
-        val missing = t.columns.filter({ not it.isSerial and not it.optional and not named.contains(it.name) }).map({ it.name })
-        unless (missing.isEmpty()) { this.fail(row.line, row.col, "`${t.name}` needs `${missing.join("`, `")}`; a column without `?` has no default") }
+        val missing = t.columns.filter({ not it.isSerial and not it.optional and it.default == "" and not named.contains(it.name) }).map({ it.name })
+        unless (missing.isEmpty()) { this.fail(row.line, row.col, "`${t.name}` needs `${missing.join("`, `")}`; a column without `?` or a default must be given") }
         var sql = "INSERT INTO ${sqlName(t.name)} (${cols.join(", ")})\nVALUES (${vals.join(", ")})"
         if (returning) { sql += "\nRETURNING *" }
         return [sql, t.name]
@@ -861,7 +940,19 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 unless (a.ty.optional) { this.fail(e.line, e.col, "`!!` on `${a.sql}`, which is never null") }
                 return Val(a.sql, a.ty.withOptional(false))
             }
-            "list" -> { this.fail(e.line, e.col, "a list is only written on the right of `in`") }
+            "list" -> {
+                // An array value: `["a", "b"]` is `ARRAY['a', 'b']`. An empty one has no type of its own;
+                // `emitAs` supplies it where a column or parameter is expected.
+                if (e.kids.isEmpty()) { this.fail(e.line, e.col, "an empty array needs the type it is stored as; write it where a column expects it") }
+                val items: List<Val> = []
+                for (k in e.kids) { items.add(this.emit(k, plan)) }
+                val first = items[0]
+                for (v in items) {
+                    if (v.isNull) { this.fail(e.line, e.col, "the elements of an array are not optional") }
+                    unless (this.sameType(v.ty, first.ty)) { this.fail(e.line, e.col, "an array holds one type; `${this.renderTy(v.ty)}` beside `${this.renderTy(first.ty)}`") }
+                }
+                return Val("ARRAY[${items.map({ it.sql }).join(", ")}]", Ty(first.ty.name + "[]", false))
+            }
             "when" -> { return this.whenCase(e, plan) }
             else -> { this.fail(e.line, e.col, "cannot compile `${e.kind}`") }
         }
@@ -904,7 +995,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     }
 
     func columnVal(s: Src, c: Column): Val {
-        val v = Val("${s.sqlAlias}.${sqlName(c.name)}", Ty(c.scalar, c.optional or s.optional))
+        val name = if (s.bare) { sqlName(c.name) } else { "${s.sqlAlias}.${sqlName(c.name)}" }
+        val v = Val(name, Ty(c.scalar, c.optional or s.optional))
         v.col = c
         v.src = s
         return v
@@ -1016,6 +1108,20 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 return Val("${recv.sql} LIKE ${pat}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
             }
             "from" -> { this.fail(e.line, e.col, "`from` starts a query; it is not called on anything") }
+            "size" -> {
+                this.argCount(e, 0)
+                unless (recv.ty.name.endsWith("[]")) { this.fail(e.line, e.col, "`size` is asked of an array, not a `${this.renderTy(recv.ty)}`") }
+                return Val("cardinality(${recv.sql})", Ty("Int", recv.ty.optional))
+            }
+            "has" -> {
+                // `tags.has("x")`: `'x' = ANY(tags)`.
+                this.argCount(e, 1)
+                unless (recv.ty.name.endsWith("[]")) { this.fail(e.line, e.col, "`has` is asked of an array, not a `${this.renderTy(recv.ty)}`") }
+                val elem = Ty(recv.ty.name.take(recv.ty.name.length - 2), false)
+                val v = this.emitAs(e.args[0].value, plan, elem)
+                unless (this.sameType(v.ty, elem)) { this.fail(e.line, e.col, "`has` on a `${this.renderTy(recv.ty)}` takes a `${elem.name}`") }
+                return Val("${v.sql} = ANY(${recv.sql})", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+            }
             else -> { this.fail(e.line, e.col, "`${e.text}` is not a method KealSql knows on a `${this.renderTy(recv.ty)}`") }
         }
         return this.lit("", "")
@@ -1029,9 +1135,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         if (e.args.size != n) { this.fail(e.line, e.col, "`${e.text}` takes ${n} argument${if (n == 1) { "" } else { "s" }}") }
     }
 
-    /// Free functions: the aggregates.
+    /// Free functions: the aggregates, and the values the database supplies.
     func call(e: Ex, var plan: Plan): Val {
         when (e.text) {
+            "now" -> { this.argCount(e, 0); return this.lit("now()", "Timestamptz") }
+            "today" -> { this.argCount(e, 0); return this.lit("CURRENT_DATE", "Date") }
+            "uuid" -> { this.argCount(e, 0); return this.lit("gen_random_uuid()", "Uuid") }
             "count" -> {
                 if (e.args.size == 1 and e.args[0].value.kind == "star") { return this.lit("count(*)", "Int") }
                 this.argCount(e, 1)
@@ -1099,7 +1208,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                     }
                     this.fail(e.line, e.col, "`${op}` needs numbers, not `${this.renderTy(a.ty)}` and `${this.renderTy(b.ty)}`")
                 }
-                val name = if (a.ty.name == "Float" or b.ty.name == "Float" or op == "/") { "Float" } else { "Int" }
+                val name = if (a.ty.name == "Decimal" or b.ty.name == "Decimal") { "Decimal" } else if (a.ty.name == "Float" or b.ty.name == "Float" or op == "/") { "Float" } else { "Int" }
                 return Val("${this.wrap(e.kids[0], a.sql, "arith")} ${op} ${this.wrap(e.kids[1], b.sql, "arith")}", Ty(name, a.ty.optional or b.ty.optional))
             }
             "==", "!=" -> {
@@ -1244,6 +1353,16 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     /// A bare name that resolves to nothing may be a value of the enum the
     /// other side of a comparison has; `emitAs` tries that before failing.
     func emitAs(e: Ex, var plan: Plan, expected: Ty): Val {
+        if (e.kind == "list" and e.kids.isEmpty() and expected.name.endsWith("[]")) {
+            return this.lit("ARRAY[]::${sqlType(expected.name, 0, this.schema)}", expected.name)
+        }
+        if (e.kind == "list" and expected.name.endsWith("[]") and this.schema.isEnum(expected.name.take(expected.name.length - 2))) {
+            // An array of an enum's values, written bare.
+            val elem = Ty(expected.name.take(expected.name.length - 2), false)
+            val items: List<String> = []
+            for (k in e.kids) { items.add(this.emitAs(k, plan, elem).sql) }
+            return this.lit("ARRAY[${items.join(", ")}]::${sqlType(expected.name, 0, this.schema)}", expected.name)
+        }
         if (e.kind == "ident" and this.schema.isEnum(expected.name) and this.schema.enumHas(expected.name, e.text)) {
             val hits = plan.sources.filter({ not it.implicit and it.table.column(e.text) != null })
             if (hits.isEmpty() and this.params.none({ it.name == e.text })) { return this.lit(this.quote(e.text), expected.name) }

@@ -26,18 +26,52 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
     // ---- what the declaration expects the catalog to hold ---------------
 
     /// A column's type as `format_type` renders it.
-    func pgType(c: Column): String {
-        return when (c.scalar) {
+    func pgType(c: Column): String { this.pgTypeOf(c.scalar, c.len, c.scale) }
+
+    func pgTypeOf(scalar: String, len: Int, scale: Int): String {
+        if (scalar.endsWith("[]")) { return this.pgTypeOf(scalar.take(scalar.length - 2), len, scale) + "[]" }
+        return when (scalar) {
             "Int" -> "integer"
             "BigInt" -> "bigint"
             "Float" -> "double precision"
+            "Decimal" -> if (len > 0) { "numeric(${len},${scale})" } else { "numeric" }
             "Bool" -> "boolean"
-            "String" -> if (c.len > 0) { "character varying(${c.len})" } else { "text" }
+            "String" -> if (len > 0) { "character varying(${len})" } else { "text" }
             "Uuid" -> "uuid"
             "Bytea" -> "bytea"
             "Date" -> "date"
+            "Time" -> "time without time zone"
             "Timestamp" -> "timestamp without time zone"
-            else -> snakeName(c.scalar)
+            "Timestamptz" -> "timestamp with time zone"
+            "Interval" -> "interval"
+            "Json" -> "json"
+            "Jsonb" -> "jsonb"
+            "Inet" -> "inet"
+            else -> snakeName(scalar)
+        }
+    }
+
+    /// A default as the catalog prints it, made comparable to ours: the
+    /// casts it adds (`'x'::text`, `0::numeric`) removed, `true`/`false`
+    /// upper-cased as we write them.
+    func normalDefault(s: String): String {
+        var out = ""
+        var i = 0
+        val n = s.length
+        while (i < n) {
+            if (s[i] == ":" and i + 1 < n and s[i + 1] == ":") {
+                // `::type` — letters, digits, spaces, parentheses and brackets of a type name
+                i += 2
+                while (i < n and s[i] != "," and s[i] != ")") { i += 1 }
+                continue
+            }
+            out += s[i]
+            i += 1
+        }
+        return when (out) {
+            "true" -> "TRUE"
+            "false" -> "FALSE"
+            else -> out
         }
     }
 
@@ -172,8 +206,12 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         val lines: List<String> = []
         for (c in t.columns) { lines.add("    " + this.compiler.columnDdl(c)) }
         for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
+        for (ch in t.decl.checks) { lines.add("    CONSTRAINT ${this.checkName(t, ch)} CHECK (${this.compiler.checkSql(t, ch)})") }
         this.add(sql + lines.join(",\n") + "\n);")
+        for (ix in this.compiler.indexesOf(t)) { this.add(this.compiler.indexDdl(t, ix)) }
     }
+
+    func checkName(t: Table, ch: CheckN): String { "${snakeName(t.name)}_${snakeName(ch.name)}_check" }
 
     proc alterTable(t: Table, lt: LiveTable) {
         // Statements name the table as it is now called — after its rename, if any.
@@ -196,7 +234,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val found = lc
             if (found == null) {
                 val ddl = this.compiler.columnDdl(c)
-                if (c.optional or c.isSerial) {
+                if (c.optional or c.isSerial or c.default != "") {
                     this.add("ALTER TABLE ${tn} ADD COLUMN ${ddl};")
                 } else {
                     this.drop("ALTER TABLE ${tn} ADD COLUMN ${ddl};", "a NOT NULL column without a default fails if `${lt.name}` has rows; add it optional and backfill, or give it a default")
@@ -215,9 +253,31 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         // before adding, so a changed rule is a drop and an add.
         val want = this.wanted(t)
         for (k in lt.constraints) {
+            if (k.kind == "c") { continue }
             unless (want.any({ this.sameConstraint(it, k) })) {
                 this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};")
             }
+        }
+        // Checks: by name. A changed expression under the same name is not
+        // seen (v1): rename the check to have it re-created.
+        val checkNames = t.decl.checks.map({ this.checkName(t, it) })
+        for (k in lt.constraints) {
+            if (k.kind == "c" and not checkNames.contains(k.name)) { this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};") }
+        }
+        for (ch in t.decl.checks) {
+            val name = this.checkName(t, ch)
+            unless (lt.constraints.any({ it.kind == "c" and it.name == name })) {
+                this.drop("ALTER TABLE ${tn} ADD CONSTRAINT ${name} CHECK (${this.compiler.checkSql(t, ch)});", "fails if a row of `${lt.name}` breaks `${ch.name}`")
+            }
+        }
+        // Indexes: by columns.
+        val wantIx = this.compiler.indexesOf(t).map({ ix -> ix.map({ snakeName(it) }).join(",") })
+        for (ix in lt.indexes) {
+            unless (wantIx.contains(ix.cols.join(","))) { this.add("DROP INDEX ${ix.name};") }
+        }
+        for (ix in this.compiler.indexesOf(t)) {
+            val key = ix.map({ snakeName(it) }).join(",")
+            unless (lt.indexes.any({ it.cols.join(",") == key })) { this.add(this.compiler.indexDdl(t, ix)) }
         }
         for (k in want) {
             unless (lt.constraints.any({ this.sameConstraint(it, k) })) {
@@ -233,7 +293,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         val cn = quoteIf(lc.name)
         val want = this.pgType(c)
         if (want != lc.ty) {
-            val typed = "ALTER TABLE ${tn} ALTER COLUMN ${cn} TYPE ${sqlType(c.scalar, c.len, this.schema())};"
+            val typed = "ALTER TABLE ${tn} ALTER COLUMN ${cn} TYPE ${sqlTypeScaled(c.scalar, c.len, c.scale, this.schema())};"
             if (this.widens(lc.ty, want)) { this.add(typed) }
             else { this.drop(typed, "`${lt.name}.${lc.name}` goes from ${lc.ty} to ${want}; values that do not fit are lost or refused") }
         }
@@ -249,6 +309,14 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         if (wantSerial and not isSerial) {
             this.note("`${lt.name}.${lc.name}` is declared `Serial` but has no sequence; that is not migrated (v1)")
         }
+        if (not wantSerial) {
+            val have = this.normalDefault(lc.default)
+            if (c.default != "" and have != this.normalDefault(c.default)) {
+                this.add("ALTER TABLE ${tn} ALTER COLUMN ${cn} SET DEFAULT ${c.default};")
+            } else if (c.default == "" and lc.default != "") {
+                this.add("ALTER TABLE ${tn} ALTER COLUMN ${cn} DROP DEFAULT;")
+            }
+        }
     }
 
     /// A type change that every existing value survives.
@@ -260,6 +328,13 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val b = to.drop(18).take(to.length - 19).toInt() ?: 0
             return b >= a
         }
+        if (from.startsWith("numeric(") and to.startsWith("numeric(")) {
+            // numeric(p,s) → numeric(q,s) with q >= p keeps every value
+            val a = from.drop(8).take(from.length - 9).split(",")
+            val b = to.drop(8).take(to.length - 9).split(",")
+            if (a.size == 2 and b.size == 2 and a[1] == b[1]) { return (b[0].toInt() ?: 0) >= (a[0].toInt() ?: 0) }
+        }
+        if (from.startsWith("numeric(") and to == "numeric") { return true }
         return false
     }
 

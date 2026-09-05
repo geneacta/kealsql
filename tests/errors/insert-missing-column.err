@@ -1,1 +1,1 @@
-error tests/errors/insert-missing-column.kealsql:5:12 `User` needs `email`; a column without `?` has no default
+error tests/errors/insert-missing-column.kealsql:5:12 `User` needs `email`; a column without `?` or a default must be given

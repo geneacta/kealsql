@@ -1,0 +1,24 @@
+enum Kind { A, B }
+table Item {
+    id:       Id
+    name:     Slug
+    price:    Decimal(10, 2) = 0
+    tags:     List<String>
+    kinds:    List<Kind>?
+    created:  Timestamptz = now()
+    active:   Bool = true
+    indexed stock: Int = 0
+    meta:     Jsonb?
+    ip:       Inet?
+    at:       Time?
+    span:     Interval?
+    key:      Uuid = uuid()
+    check inStock(stock >= 0)
+    check priced(price > 0 or not active)
+    index(active, created)
+}
+func cheap(max: Decimal): List<(String, Decimal)> { from(Item).where(price <= max and active).select(name, price) }
+proc add(name: String) { insert(Item(name = name, price = 5, tags = ["x"])) }
+func noKinds(): List<String> { from(Item).where(kinds == null).orderBy(name).select(name) }
+func tagged(tag: String): List<String> { from(Item).where(tags.has(tag)).orderBy(name).select(name) }
+func stocked(): Int { from(Item).where(stock > 0 and tags.size > 1).count() }
