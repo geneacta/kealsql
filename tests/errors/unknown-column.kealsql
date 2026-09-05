@@ -1,0 +1,4 @@
+table User { id: Id }
+func f(): List<Int> {
+    from(User).where(nam == "x").select(id)
+}

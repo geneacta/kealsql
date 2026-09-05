@@ -1,0 +1,1 @@
+error tests/errors/unknown-column.kealsql:3:22 `nam` is not a column here, nor a parameter

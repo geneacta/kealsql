@@ -1,0 +1,491 @@
+// The KealSql parser. Items are KealSql's own — `table`, `enum`, `func` /
+// `proc` with a pipeline body — and expressions follow Keal's precedence,
+// tightest binding last:
+//
+//     not and or xor xnor nand nor implies
+//     ==  !=  ===  !==  <==>   <  <=  >  >=   in   ?:
+//     +  -   *  /  %   unary -   . ?. ()
+//
+// The connectives share one level and refuse to mix without parentheses,
+// as in Keal. A pipeline is parsed as an ordinary method chain; the checker
+// is what recognises `from(...)...select(...)` in it.
+//
+// Failure is loud: print `error L:C message` and stop, the way Keal does.
+
+import "./lexing.keal"
+import "./ast.keal"
+
+func describeKind(kind: String): String {
+    return when (kind) {
+        "eof" -> "end of file"
+        ";" -> "end of statement"
+        "ident" -> "a name"
+        else -> "`${kind}`"
+    }
+}
+
+func isConnective(kind: String): Bool {
+    return when (kind) {
+        "and", "or", "xor", "xnor", "nand", "nor", "implies" -> true
+        else -> false
+    }
+}
+
+/// Binding power of a binary operator token; 0 when it is not one.
+func powerOf(kind: String): Int {
+    return when (kind) {
+        "and", "or", "xor", "xnor", "nand", "nor", "implies" -> 1
+        "==", "!=", "===", "!==", "<==>" -> 2
+        "<", "<=", ">", ">=", "<=>" -> 3
+        "in" -> 4
+        "?:" -> 5
+        "+", "-" -> 7
+        "*", "/", "%" -> 8
+        else -> 0
+    }
+}
+
+/// The words that introduce a declaration when a name follows. They stay
+/// ordinary names everywhere else — Keal's rule for `record` and `weak`.
+func isModifier(w: String): Bool {
+    return when (w) {
+        "primary", "slug", "unique", "cascade", "restrict", "setNull" -> true
+        else -> false
+    }
+}
+
+package class Parser(val toks: List<Token>, val file: String) {
+    var pos: Int = 0
+
+    func peek(): Token { this.toks[this.pos.min(this.toks.size - 1)] }
+    func peekAt(k: Int): Token { this.toks[(this.pos + k).min(this.toks.size - 1)] }
+    func at(kind: String): Bool { this.peek().kind == kind }
+    func atWord(w: String): Bool { this.at("ident") and this.peek().text == w }
+
+    func advance(): Token {
+        val t = this.peek()
+        if (this.pos < this.toks.size - 1) { this.pos += 1 }
+        return t
+    }
+
+    func eat(kind: String): Bool {
+        if (this.at(kind)) { this.advance(); return true }
+        return false
+    }
+
+    proc fail(line: Int, col: Int, msg: String) {
+        println("error ${this.file}:${line}:${col} ${msg}")
+        exit(1)
+    }
+
+    proc failHere(msg: String) {
+        val t = this.peek()
+        this.fail(t.line, t.col, msg)
+    }
+
+    proc expect(kind: String, ctx: String) {
+        if (this.eat(kind)) { return }
+        this.failHere("expected ${describeKind(kind)} ${ctx}, found ${describeToken(this.peek())}")
+    }
+
+    func expectIdent(ctx: String): String {
+        if (this.at("ident")) { return this.advance().text }
+        this.failHere("expected ${ctx}, found ${describeToken(this.peek())}")
+        return ""
+    }
+
+    proc skipSemis() { while (this.at(";")) { this.advance() } }
+
+    // ---- items --------------------------------------------------------
+
+    func program(): ProgramN {
+        val p = ProgramN()
+        this.skipSemis()
+        while (not this.at("eof")) {
+            if (this.at("import")) {
+                this.advance()
+                if (not this.at("str")) { this.failHere("expected a path after `import`") }
+                p.imports.add(this.advance().text)
+            } else if (this.atWord("table") and this.peekAt(1).kind == "ident") {
+                p.tables.add(this.tableDecl())
+            } else if (this.atWord("enum") and this.peekAt(1).kind == "ident") {
+                p.enums.add(this.enumDecl())
+            } else if (this.at("func")) {
+                p.funs.add(this.funDecl(true))
+            } else if (this.at("proc")) {
+                p.funs.add(this.funDecl(false))
+            } else {
+                this.failHere("expected `table`, `enum`, `func`, `proc` or `import`, found ${describeToken(this.peek())}")
+            }
+            this.skipSemis()
+        }
+        return p
+    }
+
+    func enumDecl(): EnumN {
+        val t = this.advance()                                 // `enum`
+        val e = EnumN(this.expectIdent("a name after `enum`"), t.line, t.col)
+        this.expect("{", "after the enum's name")
+        this.skipSemis()
+        while (not this.at("}")) {
+            e.values.add(this.expectIdent("a value name"))
+            this.skipSemis()
+            if (not this.eat(",")) { this.skipSemis(); break }
+            this.skipSemis()
+        }
+        this.expect("}", "to close the enum")
+        return e
+    }
+
+    func tableDecl(): TableN {
+        val t = this.advance()                                 // `table`
+        val tab = TableN(this.expectIdent("a name after `table`"), t.line, t.col)
+        this.expect("{", "after the table's name")
+        this.skipSemis()
+        while (not this.at("}")) {
+            if (this.atWord("unique") and this.peekAt(1).kind == "(") {
+                tab.uniques.add(this.uniqueConstraint())
+            } else {
+                tab.columns.add(this.column())
+            }
+            // A column ends with its type, and `>` does not end a statement
+            // for Keal's lexer; the next column's name is separator enough.
+            this.skipSemis()
+        }
+        this.expect("}", "to close the table")
+        return tab
+    }
+
+    func uniqueConstraint(): List<String> {
+        val t = this.advance()                                 // `unique`
+        this.expect("(", "after `unique`")
+        val names: List<String> = []
+        names.add(this.expectIdent("a column name"))
+        while (this.eat(",")) { names.add(this.expectIdent("a column name")) }
+        this.expect(")", "to close `unique(`")
+        if (names.size < 2) {
+            this.fail(t.line, t.col, "`unique(...)` on one column is written as a modifier: `unique ${names[0]}: ...`")
+        }
+        return names
+    }
+
+    func column(): ColumnN {
+        val mods: List<String> = []
+        while (this.at("ident") and isModifier(this.peek().text) and this.peekAt(1).kind == "ident") {
+            mods.add(this.advance().text)
+        }
+        val t = this.peek()
+        val name = this.expectIdent("a column name")
+        this.expect(":", "after the column's name")
+        val c = ColumnN(name, this.typeExpr(), t.line, t.col)
+        c.mods = mods
+        return c
+    }
+
+    func funDecl(isFunc: Bool): FunN {
+        val t = this.advance()                                 // `func` / `proc`
+        val word = if (isFunc) { "func" } else { "proc" }
+        val f = FunN(this.expectIdent("a name after `${word}`"), isFunc, t.line, t.col)
+        this.expect("(", "after the ${word}'s name")
+        if (not this.at(")")) {
+            f.params.add(this.param())
+            while (this.eat(",")) { f.params.add(this.param()) }
+        }
+        this.expect(")", "to close the parameter list")
+        if (isFunc) {
+            this.expect(":", "before a `func`'s result type")
+            f.ret = this.typeExpr()
+        } else if (this.at(":")) {
+            this.failHere("a `proc` returns nothing; a query that answers something is a `func`")
+        }
+        this.expect("{", "to open the body")
+        this.skipSemis()
+        while (this.at("val")) {
+            val vt = this.advance()
+            val name = this.expectIdent("a name after `val`")
+            this.expect("=", "after the name")
+            f.bindings.add(BindN(name, this.expr(), vt.line, vt.col))
+            this.expect(";", "after the binding")
+            this.skipSemis()
+        }
+        if (this.at("}")) { this.failHere("the body ends without a query") }
+        f.body = this.expr()
+        this.skipSemis()
+        this.expect("}", "to close the body")
+        return f
+    }
+
+    func param(): ParamN {
+        val t = this.peek()
+        val name = this.expectIdent("a parameter name")
+        this.expect(":", "after the parameter's name")
+        return ParamN(name, this.typeExpr(), t.line, t.col)
+    }
+
+    // ---- types --------------------------------------------------------
+
+    func typeExpr(): TypeN {
+        val t = this.peek()
+        var ty = TypeN("", t.line, t.col)
+        if (this.at("(")) {
+            this.advance()
+            ty = TypeN("tuple", t.line, t.col)
+            ty.args.add(this.typeExpr())
+            while (this.eat(",")) { ty.args.add(this.typeExpr()) }
+            if (ty.args.size < 2) { this.fail(t.line, t.col, "a tuple type has at least two members") }
+            this.expect(")", "to close the tuple type")
+        } else {
+            val name = this.expectIdent("a type")
+            ty = TypeN(name, t.line, t.col)
+            when (name) {
+                "RefId", "RefSlug" -> {
+                    this.expect("<", "after `${name}`")
+                    ty.refTable = this.expectIdent("a table name")
+                    this.expect(">", "to close `${name}<`")
+                }
+                "Ref" -> {
+                    this.expect("<", "after `Ref`")
+                    ty.refTable = this.expectIdent("a table name")
+                    this.expect(".", "between the table and its column: `Ref<Table.column>`")
+                    ty.refColumn = this.expectIdent("a column name")
+                    this.expect(">", "to close `Ref<`")
+                }
+                "List" -> {
+                    this.expect("<", "after `List`")
+                    ty.args.add(this.typeExpr())
+                    this.expect(">", "to close `List<`")
+                }
+                "String" -> {
+                    if (this.eat("(")) {
+                        if (not this.at("int")) { this.failHere("expected a length inside `String(`") }
+                        ty.len = this.advance().text.toInt() ?: 0
+                        this.expect(")", "to close `String(`")
+                    }
+                }
+                else -> {}
+            }
+        }
+        if (this.eat("?")) { ty.optional = true }
+        return ty
+    }
+
+    // ---- expressions --------------------------------------------------
+
+    func expr(): Ex { this.binary(1, "") }
+
+    func binary(minPower: Int, prevConnective: String): Ex {
+        var left = this.unary()
+        var seen = prevConnective
+        while (true) {
+            val t = this.peek()
+            val p = powerOf(t.kind)
+            if (p == 0 or p < minPower) { break }
+            this.advance()
+            if (isConnective(t.kind)) {
+                if (seen != "" and seen != t.kind) {
+                    this.fail(t.line, t.col, "`${seen}` and `${t.kind}` need parentheses to say which applies first")
+                }
+                seen = t.kind
+            }
+            // `?:` is right-associative; everything else groups to the left.
+            val right = if (t.kind == "?:") { this.binary(p, seen) } else { this.binary(p + 1, seen) }
+            val kind = when (t.kind) {
+                "?:" -> "elvis"
+                else -> if (isConnective(t.kind)) { "logical" } else { "binary" }
+            }
+            val e = Ex(kind, t.line, t.col)
+            e.text = t.kind
+            e.kids = [left, right]
+            left = e
+        }
+        return left
+    }
+
+    func unary(): Ex {
+        val t = this.peek()
+        if (this.at("-") or this.at("not") or this.at("!")) {
+            this.advance()
+            val e = Ex("unary", t.line, t.col)
+            e.text = if (t.kind == "-") { "-" } else { "not" }
+            e.kids = [this.unary()]
+            return e
+        }
+        return this.postfix()
+    }
+
+    func postfix(): Ex {
+        var e = this.primary()
+        while (true) {
+            // A chain may continue on the next line: `from(T)` newline `.where(...)`.
+            // The lexer ends the statement at the newline; a `.` right after
+            // says it was one expression after all.
+            if (this.at(";") and this.peekAt(1).kind == ".") { this.advance() }
+            val t = this.peek()
+            if (this.at(".") or this.at("?.")) {
+                this.advance()
+                // `unless` is a Keal keyword and a KealSql stage: after a `.` it is a name.
+                val name = if (this.at("unless")) { this.advance().kind } else { this.expectIdent("a name after `${t.kind}`") }
+                val kind = if (this.at("(")) { "method" } else { "field" }
+                val n = Ex(kind, t.line, t.col)
+                n.text = name
+                n.safe = t.kind == "?."
+                n.kids = [e]
+                if (kind == "method") { n.args = this.argList() }
+                e = n
+            } else if (this.at("!!")) {
+                this.advance()
+                val n = Ex("notnull", t.line, t.col)
+                n.kids = [e]
+                e = n
+            } else {
+                break
+            }
+        }
+        return e
+    }
+
+    /// `( args )` — positional, then named (`name = value`); a bare `*`;
+    /// `Table as alias`.
+    func argList(): List<ArgN> {
+        this.expect("(", "to open the arguments")
+        val out: List<ArgN> = []
+        var named = false
+        while (not this.at(")")) {
+            val t = this.peek()
+            if (this.at("*") and (this.peekAt(1).kind == ")" or this.peekAt(1).kind == ",")) {
+                this.advance()
+                out.add(ArgN("", Ex("star", t.line, t.col)))
+            } else if (this.at("ident") and this.peekAt(1).kind == "=" ) {
+                named = true
+                val name = this.advance().text
+                this.advance()
+                out.add(ArgN(name, this.expr()))
+            } else if (this.at("ident") and this.peekAt(1).kind == "ident" and this.peekAt(1).text == "as") {
+                val table = this.advance().text
+                this.advance()
+                val a = Ex("alias", t.line, t.col)
+                a.text = table
+                a.iVal = 0
+                val al = Ex("ident", this.peek().line, this.peek().col)
+                al.text = this.expectIdent("an alias after `as`")
+                a.kids = [al]
+                out.add(ArgN("", a))
+            } else {
+                if (named) { this.fail(t.line, t.col, "a positional argument cannot follow a named one") }
+                out.add(ArgN("", this.expr()))
+            }
+            if (not this.eat(",")) { break }
+        }
+        this.expect(")", "to close the arguments")
+        return out
+    }
+
+    func primary(): Ex {
+        val t = this.peek()
+        when (t.kind) {
+            "int" -> {
+                this.advance()
+                val e = Ex("int", t.line, t.col)
+                e.iVal = t.text.toInt() ?: 0
+                e.text = t.text
+                return e
+            }
+            "float" -> {
+                this.advance()
+                val e = Ex("float", t.line, t.col)
+                e.text = t.text
+                return e
+            }
+            "str" -> {
+                this.advance()
+                if (t.parts.size > 1 or (t.parts.size == 1 and not t.parts[0].isLit)) {
+                    this.fail(t.line, t.col, "a query string is a literal; interpolation would be text substitution — pass a parameter instead")
+                }
+                val e = Ex("str", t.line, t.col)
+                // A literal's text lives in its single part; an empty string has none.
+                e.text = if (t.parts.size == 1) { t.parts[0].text } else { "" }
+                return e
+            }
+            "true", "false" -> {
+                this.advance()
+                val e = Ex("bool", t.line, t.col)
+                e.text = t.kind
+                return e
+            }
+            "null" -> { this.advance(); return Ex("null", t.line, t.col) }
+            "unknown" -> { this.advance(); return Ex("unknown", t.line, t.col) }
+            "less", "equal", "greater" -> {
+                this.advance()
+                val e = Ex("comp", t.line, t.col)
+                e.text = t.kind
+                return e
+            }
+            "ident" -> {
+                this.advance()
+                if (this.at("(")) {
+                    val e = Ex("call", t.line, t.col)
+                    e.text = t.text
+                    e.args = this.argList()
+                    return e
+                }
+                val e = Ex("ident", t.line, t.col)
+                e.text = t.text
+                return e
+            }
+            "(" -> {
+                this.advance()
+                val e = this.expr()
+                this.expect(")", "to close the parenthesis")
+                return e
+            }
+            "[" -> {
+                this.advance()
+                val e = Ex("list", t.line, t.col)
+                while (not this.at("]")) {
+                    e.kids.add(this.expr())
+                    if (not this.eat(",")) { break }
+                }
+                this.expect("]", "to close the list")
+                return e
+            }
+            "when" -> { return this.whenExpr() }
+            else -> {
+                this.failHere("expected an expression, found ${describeToken(t)}")
+                return Ex("null", t.line, t.col)
+            }
+        }
+    }
+
+    func whenExpr(): Ex {
+        val t = this.advance()                                 // `when`
+        val e = Ex("when", t.line, t.col)
+        if (this.eat("(")) {
+            e.subject = this.expr()
+            this.expect(")", "to close the subject")
+        }
+        this.expect("{", "to open the `when`")
+        this.skipSemis()
+        while (not this.at("}")) {
+            val at = this.peek()
+            val arm = ArmN(at.line, at.col)
+            if (this.at("else")) {
+                this.advance()
+                arm.isElse = true
+            } else {
+                arm.values.add(this.expr())
+                while (this.eat(",")) { arm.values.add(this.expr()) }
+            }
+            this.expect("->", "after the arm's pattern")
+            arm.body = this.expr()
+            e.arms.add(arm)
+            this.skipSemis()
+        }
+        this.expect("}", "to close the `when`")
+        return e
+    }
+}
+
+package func parseFile(path: String, source: String): ProgramN {
+    lexErrorPrefix = "${path}:"
+    return Parser(lexFile(source), path).program()
+}

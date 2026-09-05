@@ -1,0 +1,1084 @@
+// The KealSql checker and emitter, in one pass: validating a declaration
+// and producing its SQL are the same walk, and the type of every expression
+// is computed as its SQL is written. Errors are `error file:L:C message`,
+// printed and fatal, the way Keal reports its own.
+
+import "./ast.keal"
+import "./schema.keal"
+
+/// One table in a query's scope: the `from` table, an explicit join, or a
+/// join a reference path asked for. `implicit` sources are reached by path
+/// only and never resolve a bare column name.
+package class Src(package val alias: String, package val table: Table) {
+    package var sqlAlias: String = ""
+    package var implicit: Bool = false
+    package var optional: Bool = false       // reached by a LEFT JOIN
+    package var joinSql: String = ""         // "" for the from table
+}
+
+/// What an expression compiled to: its SQL, its type, and the column it
+/// names when it names one (a reference path continues from there).
+package class Val(package val sql: String, package val ty: Ty) {
+    package var col: Column? = null
+    package var src: Src? = null
+    package var isNull: Bool = false         // the `null` literal
+}
+
+package class Param(package val name: String, package val index: Int, package val ty: Ty, package val sqlType: String)
+
+/// The pieces of one SELECT, gathered while walking the pipeline.
+package class Plan() {
+    package var sources: List<Src> = []
+    package var wheres: List<String> = []
+    package var havings: List<String> = []
+    package var groupBy: List<String> = []
+    package var orderBy: List<String> = []
+    package var distinct: Bool = false
+    package var limit: String = ""
+    package var offset: String = ""
+    package var grouped: Bool = false
+    package var selects: List<String> = []
+    package var selectTys: List<Ty> = []
+    package var terminal: String = ""        // select / count / exists
+    package var fetch: String = ""           // first / single
+    package var rowTable: String = ""        // select(*): the table
+}
+
+package class Compiler(val file: String, val program: ProgramN) {
+    var schema: Schema = Schema()
+    var params: List<Param> = []
+    var bindings: Map<String, Ex> = {}
+    var current: String = ""                 // the func being compiled, for messages
+    var warnings: List<String> = []          // for the func being compiled; emitted as comments
+
+    func fail(line: Int, col: Int, msg: String): Nothing {
+        println("error ${this.file}:${line}:${col} ${msg}")
+        exit(1)
+    }
+
+    // ---- schema -------------------------------------------------------
+
+    proc resolveSchema() {
+        for (e in this.program.enums) {
+            if (this.schema.enums.containsKey(e.name)) { this.fail(e.line, e.col, "enum `${e.name}` is declared twice") }
+            if (e.values.isEmpty()) { this.fail(e.line, e.col, "enum `${e.name}` has no values") }
+            this.schema.enums.set(e.name, e)
+        }
+        for (t in this.program.tables) {
+            if (this.schema.tables.containsKey(t.name)) { this.fail(t.line, t.col, "table `${t.name}` is declared twice") }
+            if (this.schema.isEnum(t.name)) { this.fail(t.line, t.col, "`${t.name}` is already an enum") }
+            this.schema.tables.set(t.name, Table(t.name, t))
+            this.schema.tableOrder.add(t.name)
+        }
+        // Columns first, references second: a reference needs its target's columns.
+        for (name in this.schema.tableOrder) { this.resolveColumns(this.schema.tables[name]!!) }
+        for (name in this.schema.tableOrder) { this.resolveReferences(this.schema.tables[name]!!) }
+    }
+
+    proc resolveColumns(var table: Table) {
+        for (c in table.decl.columns) {
+            if (table.column(c.name) != null) { this.fail(c.line, c.col, "column `${c.name}` is declared twice in `${table.name}`") }
+            val col = Column(c.name, c)
+            col.optional = c.ty.optional
+            col.len = c.ty.len
+            for (m in c.mods) {
+                if (c.mods.filter({ it == m }).size > 1) { this.fail(c.line, c.col, "`${m}` is written twice") }
+            }
+            when (c.ty.name) {
+                "Id" -> {
+                    col.scalar = "Int"; col.isPrimary = true; col.isSerial = true
+                    table.hasId = true
+                }
+                "Slug" -> { col.scalar = "String"; col.isSlug = true; table.hasSlug = true }
+                "Serial", "BigSerial" -> { col.scalar = "Int"; col.isSerial = true }
+                "Int", "BigInt", "Float", "Bool", "String", "Uuid", "Bytea", "Date", "Timestamp" -> { col.scalar = c.ty.name }
+                "RefId" -> { col.scalar = "Int"; col.refTable = c.ty.refTable }
+                "RefSlug" -> { col.scalar = "String"; col.refTable = c.ty.refTable }
+                "Ref" -> { col.refTable = c.ty.refTable; col.refColumn = c.ty.refColumn }
+                "List", "tuple" -> { this.fail(c.line, c.col, "a column cannot be a `${c.ty.render()}`") }
+                else -> {
+                    if (this.schema.isEnum(c.ty.name)) { col.scalar = c.ty.name }
+                    else { this.fail(c.line, c.col, "`${c.ty.name}` is not a type or an enum") }
+                }
+            }
+            val isKey = c.ty.name == "Id" or c.ty.name == "Slug"
+            if (c.has("primary")) {
+                if (isKey) { this.fail(c.line, c.col, "`${c.ty.name}` already carries the role; drop `primary`") }
+                col.isPrimary = true
+            }
+            if (c.has("slug")) {
+                if (isKey) { this.fail(c.line, c.col, "`${c.ty.name}` already carries the role; drop `slug`") }
+                col.isSlug = true
+            }
+            if (c.has("unique")) {
+                if (isKey or col.isPrimary or col.isSlug) { this.fail(c.line, c.col, "a key column is unique already; drop `unique`") }
+                col.isUnique = true
+            }
+            if (col.isPrimary and col.isSlug) { this.fail(c.line, c.col, "a column is the primary or the slug, not both") }
+            if (col.isSlug and col.scalar != "String") { this.fail(c.line, c.col, "a slug is a `String`; `${c.ty.render()}` cannot be one") }
+            if ((col.isPrimary or col.isSlug) and col.optional) { this.fail(c.line, c.col, "a key column cannot be optional; drop the `?`") }
+            if (col.isPrimary) {
+                if (table.primary != null) { this.fail(c.line, c.col, "`${table.name}` already has a primary: `${table.primary!!.name}`") }
+                table.primary = col
+            }
+            if (col.isSlug) {
+                if (table.slug != null) { this.fail(c.line, c.col, "`${table.name}` already has a slug: `${table.slug!!.name}`") }
+                table.slug = col
+            }
+            val onDel = c.mods.filter({ it == "cascade" or it == "restrict" or it == "setNull" })
+            if (onDel.size > 1) { this.fail(c.line, c.col, "`${onDel[0]}` and `${onDel[1]}`: one rule for delete, not two") }
+            if (onDel.size == 1 and col.refTable == "") { this.fail(c.line, c.col, "`${onDel[0]}` only means something on a reference") }
+            table.columns.add(col)
+        }
+        if (table.primary == null) { this.fail(table.decl.line, table.decl.col, "table `${table.name}` has no primary; `id: Id` is the usual one") }
+        for (u in table.decl.uniques) {
+            for (n in u) {
+                if (table.column(n) == null) { this.fail(table.decl.line, table.decl.col, "`unique(${u.join(", ")})` names `${n}`, which `${table.name}` has no column of") }
+            }
+        }
+    }
+
+    proc resolveReferences(var table: Table) {
+        for (col in table.columns) {
+            if (col.refTable == "") { continue }
+            val c = col.decl
+            val target = this.schema.tables[col.refTable]
+            if (target == null) { this.fail(c.line, c.col, "`${col.refTable}` is not a table") }
+            when (c.ty.name) {
+                "RefId" -> {
+                    unless (target.hasId) {
+                        val p = target.primary!!
+                        this.fail(c.line, c.col, "`RefId<${target.name}>` needs `${target.name}` to declare an `Id`; its primary is `${p.name}: ${p.decl.ty.render()}`, so write `Ref<${target.name}.${p.name}>`")
+                    }
+                    col.refColumn = target.primary!!.name
+                }
+                "RefSlug" -> {
+                    unless (target.hasSlug) {
+                        val s = target.slug
+                        val hint = if (s != null) { "; its slug is `${s.name}`, so write `Ref<${target.name}.${s.name}>`" } else { "; it has none" }
+                        this.fail(c.line, c.col, "`RefSlug<${target.name}>` needs `${target.name}` to declare a `Slug`${hint}")
+                    }
+                    col.refColumn = target.slug!!.name
+                }
+                else -> {
+                    val tc = target.column(col.refColumn)
+                    if (tc == null) { this.fail(c.line, c.col, "`${target.name}` has no column `${col.refColumn}`") }
+                    unless (tc.isPrimary or tc.isSlug or tc.isUnique) {
+                        this.fail(c.line, c.col, "`${target.name}.${col.refColumn}` is not unique; a reference needs `primary`, `slug` or `unique` on its target")
+                    }
+                    col.scalar = tc.scalar
+                    col.len = tc.len
+                }
+            }
+            val tc = target.column(col.refColumn)!!
+            if (tc.isSlug) { col.onUpdate = "CASCADE" }
+            val rule = c.mods.find({ it == "cascade" or it == "restrict" or it == "setNull" }) ?: ""
+            if (rule == "setNull" and not col.optional) { this.fail(c.line, c.col, "`setNull` needs an optional reference: `${c.ty.render()}?`") }
+            if (rule == "restrict" and not col.optional) { this.fail(c.line, c.col, "`restrict` is already the rule for a non-optional reference; drop it") }
+            col.onDelete = when (rule) {
+                "cascade" -> "CASCADE"
+                "restrict" -> "RESTRICT"
+                "setNull" -> "SET NULL"
+                else -> if (col.optional) { "SET NULL" } else { "RESTRICT" }
+            }
+        }
+    }
+
+    // ---- DDL ----------------------------------------------------------
+
+    /// Tables in an order that declares every reference's target first.
+    func tableOrder(): List<String> {
+        val done: List<String> = []
+        val visiting: List<String> = []
+        for (name in this.schema.tableOrder) { this.visitTable(name, done, visiting) }
+        return done
+    }
+
+    proc visitTable(name: String, var done: List<String>, var visiting: List<String>) {
+        if (done.contains(name)) { return }
+        val t = this.schema.tables[name]!!
+        if (visiting.contains(name)) {
+            this.fail(t.decl.line, t.decl.col, "`${visiting.join("` -> `")}` -> `${name}`: tables that reference each other in a cycle cannot be created in order (v1)")
+        }
+        visiting.add(name)
+        for (c in t.columns) {
+            if (c.refTable != "" and c.refTable != name) { this.visitTable(c.refTable, done, visiting) }
+        }
+        visiting.removeAt(visiting.size - 1)
+        done.add(name)
+    }
+
+    func ddl(): String {
+        var out = ""
+        for (e in this.program.enums) {
+            out += "CREATE TYPE ${sqlName(e.name)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});\n\n"
+        }
+        for (name in this.tableOrder()) {
+            val t = this.schema.tables[name]!!
+            out += "CREATE TABLE ${sqlName(t.name)} (\n"
+            val lines: List<String> = []
+            for (c in t.columns) { lines.add("    " + this.columnDdl(c)) }
+            for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
+            out += lines.join(",\n") + "\n);\n\n"
+        }
+        return out
+    }
+
+    func columnDdl(c: Column): String {
+        var s = sqlName(c.name) + " "
+        s += if (c.isSerial) { "serial" } else { sqlType(c.scalar, c.len, this.schema) }
+        if (c.isPrimary) { s += " PRIMARY KEY" }
+        else {
+            if (c.isSlug or c.isUnique) { s += " UNIQUE" }
+            if (not c.optional) { s += " NOT NULL" }
+        }
+        if (c.refTable != "") {
+            s += " REFERENCES ${sqlName(c.refTable)}(${sqlName(c.refColumn)}) ON DELETE ${c.onDelete}"
+            if (c.onUpdate != "") { s += " ON UPDATE ${c.onUpdate}" }
+        }
+        return s
+    }
+
+    // ---- types --------------------------------------------------------
+
+    /// The scalar a parameter or result type names; "" when it names none.
+    func tyOf(t: TypeN): Ty {
+        val name = when (t.name) {
+            "Int", "BigInt", "Float", "Bool", "String", "Uuid", "Bytea", "Date", "Timestamp" -> t.name
+            "Id", "Slug", "Serial", "BigSerial" -> this.fail(t.line, t.col, "`${t.name}` is a column type; a value of it is `${if (t.name == "Slug") { "String" } else { "Int" }}`")
+            "RefId" -> { this.checkRefParam(t); "Int" }
+            "RefSlug" -> { this.checkRefParam(t); "String" }
+            "Ref" -> { this.checkRefParam(t); this.schema.tables[t.refTable]!!.column(t.refColumn)!!.scalar }
+            else -> {
+                if (this.schema.isEnum(t.name)) { t.name }
+                else if (this.schema.tables.containsKey(t.name)) { "row:${t.name}" }
+                else { this.fail(t.line, t.col, "`${t.name}` is not a type") }
+            }
+        }
+        return Ty(name, t.optional)
+    }
+
+    proc checkRefParam(t: TypeN) {
+        val target = this.schema.tables[t.refTable]
+        if (target == null) { this.fail(t.line, t.col, "`${t.refTable}` is not a table") }
+        if (t.name == "RefId" and not target.hasId) { this.fail(t.line, t.col, "`RefId<${t.refTable}>`: `${t.refTable}` has no `Id`; write `Ref<${t.refTable}.${target.primary!!.name}>`") }
+        if (t.name == "RefSlug" and not target.hasSlug) { this.fail(t.line, t.col, "`RefSlug<${t.refTable}>`: `${t.refTable}` has no `Slug`") }
+        if (t.name == "Ref" and target.column(t.refColumn) == null) { this.fail(t.line, t.col, "`${t.refTable}` has no column `${t.refColumn}`") }
+    }
+
+    func sqlTypeOf(ty: Ty): String { sqlType(ty.name, 0, this.schema) }
+
+    func isNumeric(ty: Ty): Bool { ty.name == "Int" or ty.name == "Float" }
+
+    func sameType(a: Ty, b: Ty): Bool { a.name == b.name or (this.isNumeric(a) and this.isNumeric(b)) }
+
+    // ---- queries ------------------------------------------------------
+
+    func compileFun(f: FunN): String {
+        this.current = f.name
+        this.params = []
+        this.bindings = {}
+        this.warnings = []
+        var i = 1
+        for (p in f.params) {
+            if (this.params.any({ it.name == p.name })) { this.fail(p.line, p.col, "parameter `${p.name}` is declared twice") }
+            val ty = this.tyOf(p.ty)
+            if (ty.name.startsWith("row:")) { this.fail(p.ty.line, p.ty.col, "a parameter is a value, not a row") }
+            this.params.add(Param(p.name, i, ty, this.sqlTypeOf(ty)))
+            i += 1
+        }
+        for (b in f.bindings) {
+            if (this.bindings.containsKey(b.name) or this.params.any({ it.name == b.name })) { this.fail(b.line, b.col, "`${b.name}` is already bound") }
+            this.bindings.set(b.name, b.ex)
+        }
+        val body = f.body!!
+        val steps = this.flatten(body)
+        val root = steps[0]
+        val rootName = if (root.kind == "call") { root.text } else { "" }
+        var sql = ""
+        var produced = ""
+        when (rootName) {
+            "insert" -> {
+                val r = this.compileInsert(root, steps, f.isFunc)
+                sql = r[0]; produced = r[1]
+            }
+            "update", "delete" -> {
+                val r = this.compileMutation(root, steps, f.isFunc)
+                sql = r[0]; produced = r[1]
+            }
+            else -> {
+                val plan = Plan()
+                this.walkSelect(steps, plan)
+                if (plan.terminal == "") { this.fail(body.line, body.col, "the query ends without `select`, `count` or `exists`") }
+                unless (f.isFunc) { this.fail(body.line, body.col, "a `proc` returns nothing; a query that answers something is a `func`") }
+                sql = this.renderSelect(plan)
+                produced = this.producedType(plan)
+            }
+        }
+        if (f.isFunc) {
+            val declared = this.renderDeclared(f.ret!!)
+            if (declared != produced) {
+                this.fail(f.ret!!.line, f.ret!!.col, "`${f.name}` is declared `${declared}` but its query produces `${produced}`")
+            }
+        }
+        val sig = "${if (f.isFunc) { "func" } else { "proc" }} ${f.name}(${f.params.map({ "${it.name}: ${it.ty.render()}" }).join(", ")})"
+        val ret = f.ret
+        var header = "-- ${sig}${if (ret != null) { ": " + ret.render() } else { "" }}\n"
+        for (w in this.warnings) { header += "-- ${w}\n" }
+        val types = this.params.map({ it.sqlType }).join(", ")
+        return "${header}PREPARE ${sqlName(f.name)}(${types}) AS\n${sql};\n"
+    }
+
+    /// The declared result type, rendered the way `producedType` renders.
+    func renderDeclared(t: TypeN): String {
+        return when (t.name) {
+            "List" -> "List<${this.renderDeclared(t.args[0])}>"
+            "tuple" -> "(${t.args.map({ this.renderDeclared(it) }).join(", ")})" + (if (t.optional) { "?" } else { "" })
+            else -> {
+                val ty = this.tyOf(t)
+                if (ty.name.startsWith("row:")) { ty.name.drop(4) + (if (ty.optional) { "?" } else { "" }) } else { ty.render() }
+            }
+        }
+    }
+
+    func renderTy(ty: Ty): String {
+        if (ty.name.startsWith("row:")) { return ty.name.drop(4) + (if (ty.optional) { "?" } else { "" }) }
+        return ty.render()
+    }
+
+    func producedType(plan: Plan): String {
+        val one = when (plan.terminal) {
+            "count" -> "Int"
+            "exists" -> "Bool"
+            else -> {
+                if (plan.selectTys.size == 1) { this.renderTy(plan.selectTys[0]) }
+                else { "(${plan.selectTys.map({ this.renderTy(it) }).join(", ")})" }
+            }
+        }
+        if (plan.terminal != "select") { return one }
+        return when (plan.fetch) {
+            "first" -> if (one.endsWith("?")) { one } else { one + "?" }
+            "single" -> one
+            else -> "List<${one}>"
+        }
+    }
+
+    /// A method chain as the list of its calls, root first.
+    func flatten(e: Ex): List<Ex> {
+        val out: List<Ex> = []
+        var cur = e
+        while (cur.kind == "method") {
+            out.insert(0, cur)
+            cur = cur.kids[0]
+        }
+        out.insert(0, cur)
+        return out
+    }
+
+    func sourceOf(arg: Ex, implicit: Bool): Src {
+        var tableName = ""
+        var alias = ""
+        if (arg.kind == "alias") { tableName = arg.text; alias = arg.kids[0].text }
+        else if (arg.kind == "ident") { tableName = arg.text; alias = arg.text }
+        else { this.fail(arg.line, arg.col, "expected a table, or `Table as t`") }
+        val t = this.schema.tables[tableName]
+        if (t == null) { this.fail(arg.line, arg.col, "`${tableName}` is not a table") }
+        val s = Src(alias, t)
+        s.sqlAlias = if (arg.kind == "alias") { sqlName(alias) } else { sqlName(tableName) }
+        return s
+    }
+
+    func fromClause(s: Src): String {
+        if (s.alias == s.table.name) { return sqlName(s.table.name) }
+        return "${sqlName(s.table.name)} AS ${s.sqlAlias}"
+    }
+
+    proc walkSelect(steps: List<Ex>, var plan: Plan) {
+        val root = steps[0]
+        var start = 1
+        if (root.kind == "call" and root.text == "from") {
+            if (root.args.size != 1) { this.fail(root.line, root.col, "`from` takes one table") }
+            plan.sources.add(this.sourceOf(root.args[0].value, false))
+        } else if (root.kind == "ident" and this.bindings.containsKey(root.text)) {
+            // A val-bound fragment as the source: inline its own steps first.
+            val inner = this.flatten(this.bindings[root.text]!!)
+            this.walkSelect(inner, plan)
+            if (plan.terminal != "") { this.fail(root.line, root.col, "`${root.text}` already ends in `${plan.terminal}`; a fragment has no terminal") }
+        } else if (root.kind == "call") {
+            this.fail(root.line, root.col, "a query starts with `from(Table)`, `insert(...)`, `update(Table)` or `delete(Table)`, not `${root.text}(...)`")
+        } else {
+            this.fail(root.line, root.col, "a query starts with `from(Table)`")
+        }
+        var i = start
+        while (i < steps.size) {
+            val step = steps[i]
+            if (plan.terminal != "" and step.text != "first" and step.text != "single") {
+                this.fail(step.line, step.col, "`${plan.terminal}` ends the query; nothing follows it but `first()` or `single()`")
+            }
+            when (step.text) {
+                "where", "unless" -> {
+                    val v = this.oneArg(step, "a condition")
+                    val e = this.emit(v, plan)
+                    if (e.ty.name != "Bool" and e.ty.name != "Bool3") { this.fail(v.line, v.col, "`${step.text}` needs a `Bool` or a `Bool3`, not `${this.renderTy(e.ty)}`") }
+                    this.warnDropped(v, e)
+                    val sql = if (step.text == "unless") { "NOT (${e.sql})" } else { e.sql }
+                    if (plan.grouped) { plan.havings.add(sql) } else { plan.wheres.add(sql) }
+                }
+                "join", "leftJoin" -> {
+                    if (step.args.size != 2) { this.fail(step.line, step.col, "`${step.text}` takes a table and a condition: `${step.text}(Table as t, t.x == y)`") }
+                    val s = this.sourceOf(step.args[0].value, false)
+                    if (plan.sources.any({ it.alias == s.alias })) { this.fail(step.line, step.col, "`${s.alias}` is already in scope; give the join an alias: `${s.table.name} as t`") }
+                    s.optional = step.text == "leftJoin"
+                    plan.sources.add(s)
+                    val on = this.emit(step.args[1].value, plan)
+                    if (on.ty.name != "Bool" and on.ty.name != "Bool3") { this.fail(step.line, step.col, "a join condition is a `Bool`") }
+                    s.joinSql = "${if (s.optional) { "LEFT JOIN" } else { "JOIN" }} ${this.fromClause(s)} ON ${on.sql}"
+                }
+                "orderBy" -> {
+                    if (step.args.isEmpty()) { this.fail(step.line, step.col, "`orderBy` needs at least one key") }
+                    for (a in step.args) { plan.orderBy.add(this.orderKey(a.value, plan)) }
+                }
+                "groupBy" -> {
+                    if (step.args.isEmpty()) { this.fail(step.line, step.col, "`groupBy` needs at least one column") }
+                    for (a in step.args) { plan.groupBy.add(this.emit(a.value, plan).sql) }
+                    plan.grouped = true
+                }
+                "distinct" -> { this.noArgs(step); plan.distinct = true }
+                "limit", "offset" -> {
+                    val v = this.oneArg(step, "a count")
+                    val e = this.emit(v, plan)
+                    if (e.ty.name != "Int" or e.ty.optional) { this.fail(v.line, v.col, "`${step.text}` takes an `Int`") }
+                    if (step.text == "limit") { plan.limit = e.sql } else { plan.offset = e.sql }
+                }
+                "select" -> {
+                    if (step.args.isEmpty()) { this.fail(step.line, step.col, "`select` needs columns, or `*`") }
+                    for (a in step.args) {
+                        if (a.name != "") { this.fail(a.value.line, a.value.col, "`select` takes expressions, not named arguments") }
+                        if (a.value.kind == "star") {
+                            if (step.args.size != 1) { this.fail(a.value.line, a.value.col, "`*` is the whole row; it is not combined with other columns") }
+                            val s = plan.sources[0]
+                            plan.selects.add("${s.sqlAlias}.*")
+                            plan.selectTys.add(Ty("row:${s.table.name}", false))
+                        } else {
+                            val e = this.emit(a.value, plan)
+                            plan.selects.add(e.sql)
+                            plan.selectTys.add(e.ty)
+                        }
+                    }
+                    if (plan.grouped) { this.checkGrouped(step, plan) }
+                    plan.terminal = "select"
+                }
+                "count" -> { this.noArgs(step); plan.terminal = "count" }
+                "exists" -> { this.noArgs(step); plan.terminal = "exists" }
+                "first", "single" -> {
+                    this.noArgs(step)
+                    if (plan.terminal != "select") { this.fail(step.line, step.col, "`${step.text}()` follows `select`") }
+                    if (plan.fetch != "") { this.fail(step.line, step.col, "`${plan.fetch}()` was already asked for") }
+                    plan.fetch = step.text
+                }
+                "set" -> { this.fail(step.line, step.col, "`set` belongs to `update(Table)...set(...)`") }
+                else -> { this.fail(step.line, step.col, "`${step.text}` is not a query stage") }
+            }
+            i += 1
+        }
+    }
+
+    proc checkGrouped(step: Ex, var plan: Plan) {
+        for (a in step.args) {
+            val v = a.value
+            if (v.kind == "call") { continue }                         // an aggregate
+            val sql = this.emit(v, plan).sql
+            unless (plan.groupBy.contains(sql)) {
+                this.fail(v.line, v.col, "`${sql}` is neither grouped by nor aggregated; SQL would refuse this at run time")
+            }
+        }
+    }
+
+    proc warnDropped(v: Ex, e: Val) {
+        if (e.ty.name != "Bool3") { return }
+        if (v.kind == "binary" and (v.text == "==" or v.text == "!=")) {
+            val other = if (v.text == "==") { "===" } else { "!==" }
+            this.warnings.add("warning ${this.file}:${v.line}:${v.col} this `${v.text}` can be `unknown`; rows where it is are dropped, and `${other}` treats null as a value")
+        }
+    }
+
+    func oneArg(step: Ex, what: String): Ex {
+        if (step.args.size != 1 or step.args[0].name != "") { this.fail(step.line, step.col, "`${step.text}` takes ${what}") }
+        return step.args[0].value
+    }
+
+    proc noArgs(step: Ex) {
+        unless (step.args.isEmpty()) { this.fail(step.line, step.col, "`${step.text}()` takes no arguments") }
+    }
+
+    func orderKey(e: Ex, var plan: Plan): String {
+        var dir = ""
+        var nulls = ""
+        var cur = e
+        while (cur.kind == "field" and (cur.text == "asc" or cur.text == "desc" or cur.text == "nullsFirst" or cur.text == "nullsLast")) {
+            when (cur.text) {
+                "asc", "desc" -> {
+                    if (dir != "") { this.fail(cur.line, cur.col, "one direction per key") }
+                    dir = cur.text.toUpper()
+                }
+                else -> {
+                    if (nulls != "") { this.fail(cur.line, cur.col, "one nulls rule per key") }
+                    nulls = if (cur.text == "nullsFirst") { "NULLS FIRST" } else { "NULLS LAST" }
+                }
+            }
+            cur = cur.kids[0]
+        }
+        val v = this.emit(cur, plan)
+        if (v.ty.optional and nulls == "") {
+            this.fail(cur.line, cur.col, "`${v.sql}` is optional; say where its nulls go: `.nullsFirst` or `.nullsLast`")
+        }
+        if (not v.ty.optional and nulls != "") {
+            this.fail(cur.line, cur.col, "`${v.sql}` is never null; drop the nulls rule")
+        }
+        var s = v.sql
+        if (dir != "") { s += " " + dir }
+        if (nulls != "") { s += " " + nulls }
+        return s
+    }
+
+    func renderSelect(plan: Plan): String {
+        val from = plan.sources[0]
+        var lines: List<String> = []
+        val body: List<String> = []
+        body.add("FROM ${this.fromClause(from)}")
+        for (s in plan.sources) { if (s.joinSql != "") { body.add(s.joinSql) } }
+        if (not plan.wheres.isEmpty()) { body.add("WHERE ${plan.wheres.join(" AND ")}") }
+        if (not plan.groupBy.isEmpty()) { body.add("GROUP BY ${plan.groupBy.join(", ")}") }
+        if (not plan.havings.isEmpty()) { body.add("HAVING ${plan.havings.join(" AND ")}") }
+        if (plan.terminal == "exists") {
+            return "SELECT EXISTS (\n    SELECT 1\n    ${body.join("\n    ")}\n)"
+        }
+        if (plan.terminal == "count") {
+            lines.add("SELECT count(*)")
+        } else {
+            lines.add("SELECT ${if (plan.distinct) { "DISTINCT " } else { "" }}${plan.selects.join(", ")}")
+        }
+        lines.addAll(body)
+        if (not plan.orderBy.isEmpty()) { lines.add("ORDER BY ${plan.orderBy.join(", ")}") }
+        if (plan.fetch == "first") { lines.add("LIMIT 1") }
+        else if (plan.fetch == "single") { lines.add("LIMIT 2") }
+        else if (plan.limit != "") { lines.add("LIMIT ${plan.limit}") }
+        if (plan.offset != "") { lines.add("OFFSET ${plan.offset}") }
+        return lines.join("\n")
+    }
+
+    // ---- mutations ----------------------------------------------------
+
+    func compileInsert(root: Ex, steps: List<Ex>, returning: Bool): List<String> {
+        if (steps.size > 1) { this.fail(steps[1].line, steps[1].col, "nothing follows `insert(...)`") }
+        if (root.args.size != 1 or root.args[0].value.kind != "call") { this.fail(root.line, root.col, "`insert` takes a row: `insert(Table(column = value, ...))`") }
+        val row = root.args[0].value
+        val t = this.schema.tables[row.text]
+        if (t == null) { this.fail(row.line, row.col, "`${row.text}` is not a table") }
+        val plan = Plan()                      // no table in scope: values are parameters and literals
+        val cols: List<String> = []
+        val vals: List<String> = []
+        val named: List<String> = []
+        for (a in row.args) {
+            if (a.name == "") { this.fail(a.value.line, a.value.col, "a row names its columns: `${t.name}(column = value)`") }
+            val c = t.column(a.name)
+            if (c == null) { this.fail(a.value.line, a.value.col, "`${t.name}` has no column `${a.name}`") }
+            if (c.isSerial) { this.fail(a.value.line, a.value.col, "`${a.name}` is assigned by the database; do not name it") }
+            if (named.contains(a.name)) { this.fail(a.value.line, a.value.col, "`${a.name}` is given twice") }
+            named.add(a.name)
+            val v = this.emitAs(a.value, plan, c.ty())
+            this.checkAssignable(a.value, v, c)
+            cols.add(sqlName(a.name))
+            vals.add(v.sql)
+        }
+        val missing = t.columns.filter({ not it.isSerial and not it.optional and not named.contains(it.name) }).map({ it.name })
+        unless (missing.isEmpty()) { this.fail(row.line, row.col, "`${t.name}` needs `${missing.join("`, `")}`; a column without `?` has no default") }
+        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.join(", ")})\nVALUES (${vals.join(", ")})"
+        if (returning) { sql += "\nRETURNING *" }
+        return [sql, t.name]
+    }
+
+    proc checkAssignable(at: Ex, v: Val, c: Column) {
+        if (v.isNull) {
+            unless (c.optional) { this.fail(at.line, at.col, "`${c.name}` is `${c.decl.ty.render()}`; it cannot be null") }
+            return
+        }
+        unless (this.sameType(v.ty, c.ty())) { this.fail(at.line, at.col, "`${c.name}` is `${this.renderTy(c.ty())}`, not `${this.renderTy(v.ty)}`") }
+        if (v.ty.optional and not c.optional) { this.fail(at.line, at.col, "`${c.name}` is `${this.renderTy(c.ty())}`; a `${this.renderTy(v.ty)}` may be null — `?:` a default, or `!!`") }
+    }
+
+    func compileMutation(root: Ex, steps: List<Ex>, returning: Bool): List<String> {
+        val kind = root.text
+        if (root.args.size != 1) { this.fail(root.line, root.col, "`${kind}` takes one table") }
+        val s = this.sourceOf(root.args[0].value, false)
+        if (root.args[0].value.kind == "alias") { this.fail(root.line, root.col, "`${kind}` takes the table itself, without an alias") }
+        val plan = Plan()
+        plan.sources.add(s)
+        val sets: List<String> = []
+        var i = 1
+        while (i < steps.size) {
+            val step = steps[i]
+            when (step.text) {
+                "where", "unless" -> {
+                    val v = this.oneArg(step, "a condition")
+                    val e = this.emit(v, plan)
+                    if (e.ty.name != "Bool" and e.ty.name != "Bool3") { this.fail(v.line, v.col, "`${step.text}` needs a `Bool`") }
+                    this.warnDropped(v, e)
+                    plan.wheres.add(if (step.text == "unless") { "NOT (${e.sql})" } else { e.sql })
+                }
+                "set" -> {
+                    if (kind != "update") { this.fail(step.line, step.col, "`set` belongs to `update`") }
+                    if (i != steps.size - 1) { this.fail(steps[i + 1].line, steps[i + 1].col, "`set` ends an update") }
+                    if (step.args.isEmpty()) { this.fail(step.line, step.col, "`set` needs `column = value`") }
+                    for (a in step.args) {
+                        if (a.name == "") { this.fail(a.value.line, a.value.col, "`set` names its columns: `set(column = value)`") }
+                        val c = s.table.column(a.name)
+                        if (c == null) { this.fail(a.value.line, a.value.col, "`${s.table.name}` has no column `${a.name}`") }
+                        if (c.isSerial) { this.fail(a.value.line, a.value.col, "`${a.name}` is assigned by the database") }
+                        val v = this.emitAs(a.value, plan, c.ty())
+                        this.checkAssignable(a.value, v, c)
+                        sets.add("${sqlName(a.name)} = ${v.sql}")
+                    }
+                }
+                else -> { this.fail(step.line, step.col, "`${step.text}` is not part of a `${kind}`") }
+            }
+            i += 1
+        }
+        if (plan.sources.size > 1) { this.fail(root.line, root.col, "a `${kind}` cannot reach through a reference; compare the reference column itself") }
+        if (kind == "update" and sets.isEmpty()) { this.fail(root.line, root.col, "an `update` ends with `set(column = value)`") }
+        if (plan.wheres.isEmpty()) { this.fail(root.line, root.col, "`${kind}` without `where` touches every row; write `.where(true)` to mean that") }
+        var sql = if (kind == "update") {
+            "UPDATE ${sqlName(s.table.name)}\nSET ${sets.join(", ")}\nWHERE ${plan.wheres.join(" AND ")}"
+        } else {
+            "DELETE FROM ${sqlName(s.table.name)}\nWHERE ${plan.wheres.join(" AND ")}"
+        }
+        if (returning) { sql += "\nRETURNING *" }
+        return [sql, s.table.name]
+    }
+
+    // ---- expressions --------------------------------------------------
+
+    func lit(sql: String, ty: String): Val { Val(sql, Ty(ty, false)) }
+
+    func quote(s: String): String { "'" + s.replace("'", "''") + "'" }
+
+    func emit(e: Ex, var plan: Plan): Val {
+        when (e.kind) {
+            "int" -> { return this.lit(e.text, "Int") }
+            "float" -> { return this.lit(e.text, "Float") }
+            "str" -> { return this.lit(this.quote(e.text), "String") }
+            "bool" -> { return this.lit(e.text.toUpper(), "Bool") }
+            "unknown" -> { return this.lit("NULL::boolean", "Bool3") }
+            "comp" -> {
+                val n = when (e.text) {
+                    "less" -> "-1"
+                    "greater" -> "1"
+                    else -> "0"
+                }
+                return this.lit(n, "Comp")
+            }
+            "null" -> {
+                val v = Val("NULL", Ty("null", true))
+                v.isNull = true
+                return v
+            }
+            "star" -> { this.fail(e.line, e.col, "`*` is only written in `select(*)` and `count(*)`") }
+            "alias" -> { this.fail(e.line, e.col, "`as` only names a table in `from` or `join`") }
+            "ident" -> { return this.ident(e, plan) }
+            "field" -> { return this.field(e, plan) }
+            "method" -> { return this.method(e, plan) }
+            "call" -> { return this.call(e, plan) }
+            "unary" -> {
+                val v = this.emit(e.kids[0], plan)
+                if (e.text == "-") {
+                    unless (this.isNumeric(v.ty)) { this.fail(e.line, e.col, "unary `-` needs a number") }
+                    return Val("-${v.sql}", v.ty)
+                }
+                if (v.ty.name != "Bool" and v.ty.name != "Bool3") { this.fail(e.line, e.col, "`not` needs a `Bool`") }
+                return Val("NOT ${this.wrap(e.kids[0], v.sql, "not")}", v.ty)
+            }
+            "binary" -> { return this.binary(e, plan) }
+            "logical" -> { return this.logical(e, plan) }
+            "elvis" -> {
+                val a = this.emit(e.kids[0], plan)
+                val b = this.emit(e.kids[1], plan)
+                unless (a.ty.optional) { this.fail(e.line, e.col, "`?:` needs an optional on its left; `${a.sql}` is never null") }
+                if (b.isNull) { this.fail(e.line, e.col, "`?: null` changes nothing") }
+                unless (this.sameType(a.ty, b.ty)) { this.fail(e.line, e.col, "`?:` joins a `${this.renderTy(a.ty)}` with a `${this.renderTy(b.ty)}`") }
+                return Val("COALESCE(${a.sql}, ${b.sql})", Ty(a.ty.name, b.ty.optional))
+            }
+            "notnull" -> {
+                val a = this.emit(e.kids[0], plan)
+                unless (a.ty.optional) { this.fail(e.line, e.col, "`!!` on `${a.sql}`, which is never null") }
+                return Val(a.sql, a.ty.withOptional(false))
+            }
+            "list" -> { this.fail(e.line, e.col, "a list is only written on the right of `in`") }
+            "when" -> { return this.whenCase(e, plan) }
+            else -> { this.fail(e.line, e.col, "cannot compile `${e.kind}`") }
+        }
+        return this.lit("", "")
+    }
+
+    /// An operand in parentheses when its own operator could be misread:
+    /// a connective under a connective, any operator under `not` or under
+    /// arithmetic. A comparison under AND needs none — SQL binds it tighter.
+    func wrap(kid: Ex, sql: String, under: String): String {
+        val needs = when (under) {
+            "logical" -> kid.kind == "logical"
+            "not" -> kid.kind == "logical" or kid.kind == "binary"
+            else -> kid.kind == "binary" or kid.kind == "logical" or kid.kind == "unary"
+        }
+        if (needs) { return "(${sql})" }
+        return sql
+    }
+
+    /// A bare name: a column in exactly one source, then a parameter.
+    func ident(e: Ex, var plan: Plan): Val {
+        val hits = plan.sources.filter({ not it.implicit and it.table.column(e.text) != null })
+        if (hits.size > 1) {
+            this.fail(e.line, e.col, "`${e.text}` is a column of both `${hits[0].alias}` and `${hits[1].alias}`; say which")
+        }
+        if (hits.size == 1) {
+            if (this.params.any({ it.name == e.text })) {
+                this.fail(e.line, e.col, "`${e.text}` is both a parameter and a column of `${hits[0].table.name}`; rename the parameter")
+            }
+            return this.columnVal(hits[0], hits[0].table.column(e.text)!!)
+        }
+        val p = this.params.find({ it.name == e.text })
+        if (p != null) { return Val("$" + p.index, p.ty) }
+        if (this.bindings.containsKey(e.text)) { this.fail(e.line, e.col, "`${e.text}` is a query fragment; it is used as a source, or on the right of `in` with a `select`") }
+        if (this.schema.tables.containsKey(e.text)) { this.fail(e.line, e.col, "`${e.text}` is a table; a query reaches it with `from(${e.text})`") }
+        if (this.schema.isEnum(e.text)) { this.fail(e.line, e.col, "`${e.text}` is an enum; name one of its values: `${e.text}.${this.schema.enums[e.text]!!.values[0]}`") }
+        this.fail(e.line, e.col, "`${e.text}` is not a column here, nor a parameter")
+        return this.lit("", "")
+    }
+
+    func columnVal(s: Src, c: Column): Val {
+        val v = Val("${s.sqlAlias}.${sqlName(c.name)}", Ty(c.scalar, c.optional or s.optional))
+        v.col = c
+        v.src = s
+        return v
+    }
+
+    /// `a.b`: a column of a table in scope, an enum's value, or one step
+    /// along a reference — which is a join, inner through `.`, left through `?.`.
+    func field(e: Ex, var plan: Plan): Val {
+        val recv = e.kids[0]
+        if (recv.kind == "ident") {
+            val s = plan.sources.find({ it.alias == recv.text and not it.implicit })
+            if (s != null) {
+                val c = s.table.column(e.text)
+                if (c == null) { this.fail(e.line, e.col, "`${s.table.name}` has no column `${e.text}`") }
+                if (e.safe) { this.fail(e.line, e.col, "`?.` reaches through a reference; `${recv.text}` is a table") }
+                return this.columnVal(s, c)
+            }
+            if (this.schema.isEnum(recv.text)) {
+                unless (this.schema.enumHas(recv.text, e.text)) { this.fail(e.line, e.col, "`${recv.text}` has no value `${e.text}`") }
+                return this.lit(this.quote(e.text), recv.text)
+            }
+        }
+        val base = this.emit(recv, plan)
+        val col = base.col
+        val src = base.src
+        val why = "`.${e.text}` needs a reference on its left; `${base.sql}` is a `${this.renderTy(base.ty)}`"
+        if (col == null) { this.fail(e.line, e.col, why) }
+        if (src == null) { this.fail(e.line, e.col, why) }
+        if (col.refTable == "") { this.fail(e.line, e.col, why) }
+        if (col.optional and not e.safe) {
+            this.fail(e.line, e.col, "`${col.name}` is optional; write `${col.name}?.${e.text}` — a left join, and the result is optional")
+        }
+        if (not col.optional and e.safe) {
+            this.fail(e.line, e.col, "`${col.name}` is never null; write `${col.name}.${e.text}`")
+        }
+        val joined = this.implicitJoin(src, col, plan)
+        val target = joined.table.column(e.text)
+        if (target == null) { this.fail(e.line, e.col, "`${joined.table.name}` has no column `${e.text}`") }
+        return this.columnVal(joined, target)
+    }
+
+    /// The source a reference column reaches, added to the plan the first time.
+    func implicitJoin(from: Src, col: Column, var plan: Plan): Src {
+        val key = "${from.alias}.${col.name}"
+        val have = plan.sources.find({ it.implicit and it.alias == key })
+        if (have != null) { return have }
+        val target = this.schema.tables[col.refTable]!!
+        var sqlAlias = sqlName(col.name)
+        var n = 2
+        while (plan.sources.any({ it.sqlAlias == sqlAlias })) {
+            sqlAlias = "${sqlName(col.name)}_${n}"
+            n += 1
+        }
+        val s = Src(key, target)
+        s.implicit = true
+        s.sqlAlias = sqlAlias
+        s.optional = col.optional or from.optional
+        val word = if (col.optional) { "LEFT JOIN" } else { "JOIN" }
+        val named = if (sqlAlias == sqlName(target.name)) { sqlAlias } else { "${sqlName(target.name)} AS ${sqlAlias}" }
+        s.joinSql = "${word} ${named} ON ${from.sqlAlias}.${sqlName(col.name)} = ${sqlAlias}.${sqlName(col.refColumn)}"
+        plan.sources.add(s)
+        return s
+    }
+
+    func method(e: Ex, var plan: Plan): Val {
+        if (e.text == "select" or e.text == "count" or e.text == "exists") {
+            // A subquery: a fragment finished inside an expression.
+            val sub = Plan()
+            this.walkSelect(this.flatten(e), sub)
+            if (sub.terminal == "select" and sub.selectTys.size != 1) { this.fail(e.line, e.col, "a subquery selects one column") }
+            val ty = when (sub.terminal) {
+                "count" -> Ty("Int", false)
+                "exists" -> Ty("Bool", false)
+                else -> sub.selectTys[0]
+            }
+            return Val("(${this.renderSelect(sub).replace("\n", " ")})", ty)
+        }
+        if (e.safe) { this.fail(e.line, e.col, "`?.` reaches through a reference, not a method") }
+        val recv = this.emit(e.kids[0], plan)
+        val args: List<Val> = []
+        for (a in e.args) { args.add(this.emit(a.value, plan)) }
+        val opt = recv.ty.optional or args.any({ it.ty.optional })
+        when (e.text) {
+            "like", "ilike" -> {
+                this.needs(e, recv, "String")
+                this.argCount(e, 1)
+                this.needs(e, args[0], "String")
+                return Val("${recv.sql} ${e.text.toUpper()} ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+            }
+            "lower", "upper", "trim" -> {
+                this.needs(e, recv, "String")
+                this.argCount(e, 0)
+                return Val("${e.text}(${recv.sql})", recv.ty)
+            }
+            "length" -> {
+                this.needs(e, recv, "String")
+                this.argCount(e, 0)
+                return Val("length(${recv.sql})", Ty("Int", recv.ty.optional))
+            }
+            "startsWith", "endsWith", "contains" -> {
+                this.needs(e, recv, "String")
+                this.argCount(e, 1)
+                this.needs(e, args[0], "String")
+                val pat = when (e.text) {
+                    "startsWith" -> "${args[0].sql} || '%'"
+                    "endsWith" -> "'%' || ${args[0].sql}"
+                    else -> "'%' || ${args[0].sql} || '%'"
+                }
+                return Val("${recv.sql} LIKE ${pat}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+            }
+            "from" -> { this.fail(e.line, e.col, "`from` starts a query; it is not called on anything") }
+            else -> { this.fail(e.line, e.col, "`${e.text}` is not a method KealSql knows on a `${this.renderTy(recv.ty)}`") }
+        }
+        return this.lit("", "")
+    }
+
+    proc needs(e: Ex, v: Val, ty: String) {
+        if (v.ty.name != ty) { this.fail(e.line, e.col, "`${e.text}` needs a `${ty}`, not `${this.renderTy(v.ty)}`") }
+    }
+
+    proc argCount(e: Ex, n: Int) {
+        if (e.args.size != n) { this.fail(e.line, e.col, "`${e.text}` takes ${n} argument${if (n == 1) { "" } else { "s" }}") }
+    }
+
+    /// Free functions: the aggregates.
+    func call(e: Ex, var plan: Plan): Val {
+        when (e.text) {
+            "count" -> {
+                if (e.args.size == 1 and e.args[0].value.kind == "star") { return this.lit("count(*)", "Int") }
+                this.argCount(e, 1)
+                return Val("count(${this.emit(e.args[0].value, plan).sql})", Ty("Int", false))
+            }
+            "sum", "avg", "min", "max" -> {
+                this.argCount(e, 1)
+                val v = this.emit(e.args[0].value, plan)
+                if ((e.text == "sum" or e.text == "avg") and not this.isNumeric(v.ty)) { this.fail(e.line, e.col, "`${e.text}` needs a number") }
+                val name = if (e.text == "avg") { "Float" } else { v.ty.name }
+                return Val("${e.text}(${v.sql})", Ty(name, true))
+            }
+            "from", "insert", "update", "delete" -> { this.fail(e.line, e.col, "`${e.text}` starts a query; it cannot sit inside an expression") }
+            else -> {
+                if (this.schema.tables.containsKey(e.text)) { this.fail(e.line, e.col, "a row `${e.text}(...)` is only written inside `insert(...)`") }
+                this.fail(e.line, e.col, "`${e.text}` is not a function KealSql knows")
+            }
+        }
+        return this.lit("", "")
+    }
+
+    func binary(e: Ex, var plan: Plan): Val {
+        val op = e.text
+        if (op == "in") { return this.inExpr(e, plan) }
+        // An enum's value may be written bare on either side of a comparison:
+        // the side that is not a bare name goes first and lends its type.
+        val leftBare = e.kids[0].kind == "ident" and e.kids[1].kind != "ident"
+        val first = this.emit(if (leftBare) { e.kids[1] } else { e.kids[0] }, plan)
+        val second = this.emitAs(if (leftBare) { e.kids[0] } else { e.kids[1] }, plan, first.ty)
+        val a = if (leftBare) { second } else { first }
+        val b = if (leftBare) { first } else { second }
+        when (op) {
+            "+", "-", "*", "/", "%" -> {
+                unless (this.isNumeric(a.ty) and this.isNumeric(b.ty)) {
+                    if (op == "+" and a.ty.name == "String" and b.ty.name == "String") {
+                        return Val("${a.sql} || ${b.sql}", Ty("String", a.ty.optional or b.ty.optional))
+                    }
+                    this.fail(e.line, e.col, "`${op}` needs numbers, not `${this.renderTy(a.ty)}` and `${this.renderTy(b.ty)}`")
+                }
+                val name = if (a.ty.name == "Float" or b.ty.name == "Float" or op == "/") { "Float" } else { "Int" }
+                return Val("${this.wrap(e.kids[0], a.sql, "arith")} ${op} ${this.wrap(e.kids[1], b.sql, "arith")}", Ty(name, a.ty.optional or b.ty.optional))
+            }
+            "==", "!=" -> {
+                if (a.isNull and b.isNull) { this.fail(e.line, e.col, "`null ${op} null` is not a question") }
+                if (b.isNull or a.isNull) {
+                    val x = if (b.isNull) { a } else { b }
+                    unless (x.ty.optional) { this.fail(e.line, e.col, "`${x.sql}` is never null; the test is always ${if (op == "==") { "false" } else { "true" }}") }
+                    return Val("${x.sql} IS ${if (op == "!=") { "NOT " } else { "" }}NULL", Ty("Bool", false))
+                }
+                this.comparable(e, a, b)
+                val sql = "${a.sql} ${if (op == "==") { "=" } else { "<>" }} ${b.sql}"
+                return Val(sql, Ty(if (a.ty.optional or b.ty.optional) { "Bool3" } else { "Bool" }, false))
+            }
+            "===", "!==" -> {
+                if (a.isNull or b.isNull) { this.fail(e.line, e.col, "`${op} null` is spelled `${if (op == "===") { "==" } else { "!=" }} null`") }
+                this.comparable(e, a, b)
+                unless (a.ty.optional or b.ty.optional) { this.fail(e.line, e.col, "neither side can be null; `${if (op == "===") { "==" } else { "!=" }}` asks the same question") }
+                return Val("${a.sql} IS ${if (op == "===") { "NOT " } else { "" }}DISTINCT FROM ${b.sql}", Ty("Bool", false))
+            }
+            "<", "<=", ">", ">=" -> {
+                this.comparable(e, a, b)
+                if (a.ty.name == "Bool" or this.schema.isEnum(a.ty.name)) { this.fail(e.line, e.col, "`${op}` has no meaning on a `${a.ty.name}`") }
+                return Val("${a.sql} ${op} ${b.sql}", Ty(if (a.ty.optional or b.ty.optional) { "Bool3" } else { "Bool" }, false))
+            }
+            "<=>" -> {
+                this.comparable(e, a, b)
+                val sql = "CASE WHEN ${a.sql} < ${b.sql} THEN -1 WHEN ${a.sql} = ${b.sql} THEN 0 WHEN ${a.sql} > ${b.sql} THEN 1 END"
+                return Val(sql, Ty("Comp", a.ty.optional or b.ty.optional))
+            }
+            "<==>" -> {
+                this.comparable(e, a, b)
+                return Val("${a.sql} <> ${b.sql}", Ty(if (a.ty.optional or b.ty.optional) { "Bool3" } else { "Bool" }, false))
+            }
+            else -> { this.fail(e.line, e.col, "cannot compile `${op}`") }
+        }
+        return this.lit("", "")
+    }
+
+    proc comparable(e: Ex, a: Val, b: Val) {
+        if (a.isNull or b.isNull) { this.fail(e.line, e.col, "compare with null using `== null` or `!= null`") }
+        unless (this.sameType(a.ty, b.ty)) {
+            this.fail(e.line, e.col, "`${this.renderTy(a.ty)}` and `${this.renderTy(b.ty)}` cannot be compared")
+        }
+    }
+
+    func inExpr(e: Ex, var plan: Plan): Val {
+        val a = this.emit(e.kids[0], plan)
+        val rhs = e.kids[1]
+        if (rhs.kind == "list") {
+            if (rhs.kids.isEmpty()) { this.fail(rhs.line, rhs.col, "`in []` is always false") }
+            val items: List<Val> = []
+            for (k in rhs.kids) { items.add(this.emit(k, plan)) }
+            var opt = a.ty.optional
+            for (v in items) {
+                if (v.isNull) { this.fail(rhs.line, rhs.col, "`null` in an `in` list never matches; test `== null` separately") }
+                unless (this.sameType(a.ty, v.ty)) { this.fail(rhs.line, rhs.col, "`${this.renderTy(v.ty)}` in a list of `${this.renderTy(a.ty)}`") }
+                if (v.ty.optional) { opt = true }
+            }
+            return Val("${a.sql} IN (${items.map({ it.sql }).join(", ")})", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+        }
+        val sub = this.emit(rhs, plan)
+        unless (rhs.kind == "method" and rhs.text == "select") { this.fail(rhs.line, rhs.col, "`in` takes a list, or a query ending in `select(column)`") }
+        unless (this.sameType(a.ty, sub.ty)) { this.fail(rhs.line, rhs.col, "the subquery selects `${this.renderTy(sub.ty)}`, not `${this.renderTy(a.ty)}`") }
+        return Val("${a.sql} IN ${sub.sql}", Ty(if (a.ty.optional or sub.ty.optional) { "Bool3" } else { "Bool" }, false))
+    }
+
+    /// The eight connectives, with Kleene's tables where a `Bool3` is involved
+    /// — which is what SQL's NULL propagation already computes for AND, OR
+    /// and NOT, and what the rewrites below preserve for the other five.
+    func logical(e: Ex, var plan: Plan): Val {
+        // The ident on either side may be unresolvable only as an enum value
+        // — never here, where both sides are booleans.
+        val a = this.emit(e.kids[0], plan)
+        val b = this.emit(e.kids[1], plan)
+        for (v in [a, b]) {
+            if (v.ty.name != "Bool" and v.ty.name != "Bool3") { this.fail(e.line, e.col, "`${e.text}` needs `Bool`s, not `${this.renderTy(v.ty)}`") }
+        }
+        val ty = Ty(if (a.ty.name == "Bool3" or b.ty.name == "Bool3") { "Bool3" } else { "Bool" }, false)
+        val x = this.wrap(e.kids[0], a.sql, "logical")
+        val y = this.wrap(e.kids[1], b.sql, "logical")
+        val sql = when (e.text) {
+            "and" -> "${x} AND ${y}"
+            "or" -> "${x} OR ${y}"
+            "xor" -> "${x} <> ${y}"
+            "xnor" -> "${x} = ${y}"
+            "nand" -> "NOT (${x} AND ${y})"
+            "nor" -> "NOT (${x} OR ${y})"
+            else -> "NOT ${x} OR ${y}"                            // implies
+        }
+        return Val(sql, ty)
+    }
+
+    func whenCase(e: Ex, var plan: Plan): Val {
+        if (e.arms.isEmpty()) { this.fail(e.line, e.col, "a `when` needs at least one arm") }
+        val subject = e.subject
+        val subj: Val? = if (subject != null) { this.emit(subject, plan) } else { null }
+        var out = if (subj != null) { "CASE ${subj.sql}" } else { "CASE" }
+        val first = this.emit(e.arms[0].body!!, plan)
+        var ty = first.ty
+        var hasElse = false
+        for (arm in e.arms) {
+            val body = this.emit(arm.body!!, plan)
+            unless (body.isNull or this.sameType(ty, body.ty)) { this.fail(arm.line, arm.col, "this arm is a `${this.renderTy(body.ty)}`; the first was a `${this.renderTy(ty)}`") }
+            if (body.ty.optional or body.isNull) { ty = ty.withOptional(true) }
+            if (arm.isElse) {
+                hasElse = true
+                out += " ELSE ${body.sql}"
+            } else {
+                val conds: List<String> = []
+                for (v in arm.values) {
+                    if (subj != null) {
+                        val c = this.emitAs(v, plan, subj.ty)
+                        unless (this.sameType(subj.ty, c.ty)) { this.fail(v.line, v.col, "a `${this.renderTy(c.ty)}` cannot match a `${this.renderTy(subj.ty)}`") }
+                        conds.add(c.sql)
+                    } else {
+                        val c = this.emit(v, plan)
+                        if (c.ty.name != "Bool" and c.ty.name != "Bool3") { this.fail(v.line, v.col, "a `when` without a subject tests `Bool`s") }
+                        conds.add(c.sql)
+                    }
+                }
+                val test = if (subj != null) { conds.join(", ") } else { conds.join(" OR ") }
+                out += " WHEN ${test} THEN ${body.sql}"
+            }
+        }
+        unless (hasElse) {
+            // A `when` over an enum that names every value closes without `else`.
+            var closed = false
+            if (subj != null) {
+                if (this.schema.isEnum(subj.ty.name) and not subj.ty.optional) {
+                    val named: List<String> = []
+                    for (arm in e.arms) {
+                        for (v in arm.values) { if (v.kind == "ident" or v.kind == "field") { named.add(v.text) } }
+                    }
+                    closed = this.schema.enums[subj.ty.name]!!.values.all({ named.contains(it) })
+                }
+            }
+            unless (closed) { this.fail(e.line, e.col, "a `when` that produces a value needs an `else` arm") }
+        }
+        return Val(out + " END", ty)
+    }
+
+    /// A bare name that resolves to nothing may be a value of the enum the
+    /// other side of a comparison has; `emitAs` tries that before failing.
+    func emitAs(e: Ex, var plan: Plan, expected: Ty): Val {
+        if (e.kind == "ident" and this.schema.isEnum(expected.name) and this.schema.enumHas(expected.name, e.text)) {
+            val hits = plan.sources.filter({ not it.implicit and it.table.column(e.text) != null })
+            if (hits.isEmpty() and this.params.none({ it.name == e.text })) { return this.lit(this.quote(e.text), expected.name) }
+        }
+        return this.emit(e, plan)
+    }
+
+    // ---- the whole file -----------------------------------------------
+
+    package func compile(): String {
+        this.resolveSchema()
+        var out = this.ddl()
+        for (f in this.program.funs) { out += this.compileFun(f) + "\n" }
+        return out
+    }
+}

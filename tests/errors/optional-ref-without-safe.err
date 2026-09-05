@@ -1,0 +1,1 @@
+error tests/errors/optional-ref-without-safe.kealsql:6:29 `editor` is optional; write `editor?.name` — a left join, and the result is optional

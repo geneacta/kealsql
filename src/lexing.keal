@@ -1,0 +1,706 @@
+// Vendored from keal/selfhost/lexing.keal at v1.2.0 (6da2cf7), under the
+// Apache-2.0 licence. `package` visibility keeps the original out of reach
+// of another directory, so it is copied; ci/sync-lexer.sh holds the copy to
+// the original plus exactly the KealSql additions marked `// kealsql:`.
+//
+// KealSql additions: the `===` / `!==` tokens and the `unknown` value word.
+//
+// The lexing library of the self-hosted compiler. It mirrors src/lexer.rs
+// decision for decision — including its quirks: a backtracked exponent does
+// not restore the column, and columns count bytes, not characters — because
+// the toolchain it must agree with does exactly that.
+//
+// It produces structured tokens; `lexer.keal` derives the comparable dump,
+// `parser.keal` consumes them directly.
+
+func isDigit(c: String): Bool { c >= "0" and c <= "9" }
+
+func isAlpha(c: String): Bool {
+    (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_"
+}
+
+func isAlnum(c: String): Bool { isAlpha(c) or isDigit(c) }
+
+/// How many bytes this character occupies in UTF-8 — the unit the reference
+/// lexer counts columns in.
+package func byteWidth(c: String): Int {
+    val n = c.code()
+    if (n < 128) { return 1 }
+    if (n < 2048) { return 2 }
+    if (n < 65536) { return 3 }
+    return 4
+}
+
+/// The dump's escaping, matching `keal tokens` exactly.
+package func esc(s: String): String {
+    var out = ""
+    for (c in s) {
+        out += when (c) {
+            "\\" -> "\\\\"
+            "\n" -> "\\n"
+            "\t" -> "\\t"
+            "\r" -> "\\r"
+            "\u{0}" -> "\\0"
+            else -> c
+        }
+    }
+    return out
+}
+
+/// A keyword, or "" when the word is an ordinary identifier.
+func keywordOf(w: String): String {
+    return when (w) {
+        "val", "var", "func", "proc", "return", "if", "unless", "else",
+        // The old spelling of `func`, lexed on purpose so the parser can
+        // name its replacement rather than reading it as an identifier and
+        // reporting something that makes no sense.
+        "fun",
+        "while", "for", "in", "break", "continue", "try", "catch", "throw",
+        "class", "this", "null",
+        "true", "false", "when", "is", "import",
+        // The three values of a `Comp`, written as `true` and `false` are.
+        // A three-valued answer is the same kind of thing as a two-valued
+        // one, so it is spelled the same way: a bare word.
+        "less", "equal", "greater",
+        // kealsql: the third value of a `Bool3`, spelled as the others are.
+        "unknown",
+        // The visibility words. `internal` and `protected` name no rule
+        // yet; they are reserved so that the day they do, no program has
+        // to be renamed to make room for them.
+        "public", "private", "package", "internal", "protected",
+        // Held for features the language does not have. Reserved now so
+        // that the day one arrives, no program has to be renamed to make
+        // room for it — and refused where written rather than quietly read
+        // as a name, so nobody builds on one by accident.
+        "async", "await", "yield", "sealed", "super", "static", "typealias",
+        "not", "and", "or", "xor", "xnor", "nand", "nor", "implies",
+        // The bit operators. Words, like the connectives: `and`, `or` and
+        // `xor` are the Bool ones and `^` is already `xor`, so the bits get
+        // names of their own rather than sigils read twice.
+        "band", "bor", "bxor", "bnot", "shl", "shr", "ushr" -> w
+        else -> ""
+    }
+}
+
+/// Can a newline directly after this token become a `;`?
+func endsStatement(kind: String): Bool {
+    return when (kind) {
+        "int", "float", "str", "ident", "return", "break", "continue",
+        "null", "true", "false", "less", "equal", "greater", "unknown", "this", ")", "}", "]", "?", "!!",
+        "++", "--" -> true
+        else -> false
+    }
+}
+
+/// One piece of a string literal: literal text, or an interpolation hole
+/// with the source it holds and where that source starts.
+/// Prepended to the `L:C` of every lexing error. Empty for the single-file
+/// drivers; the checker's loader sets it to `path:` per file, and fragments
+/// lexed for interpolation holes inherit it automatically.
+package var lexErrorPrefix = ""
+
+record Part(package val isLit: Bool, package val text: String, package val line: Int, package val col: Int)
+
+/// One token. `parts` is only ever filled for `str`.
+package record Token(
+    val kind: String,
+    package val text: String,
+    package val line: Int,
+    package val col: Int,
+    val parts: List<Part>
+)
+
+class Lexer(val src: String, val startLine: Int, val startCol: Int, val allowShebang: Bool) {
+    val cs: List<String> = src.chars()
+    var pos: Int = 0
+    package var line: Int = startLine
+    package var col: Int = startCol
+    var lastKind: String = ""
+    val brackets: List<String> = []
+    val out: List<Token> = []
+
+    func peek(): String {
+        if (this.pos < this.cs.size) { return this.cs[this.pos] }
+        return ""
+    }
+
+    func peekAt(k: Int): String {
+        if (this.pos + k < this.cs.size) { return this.cs[this.pos + k] }
+        return ""
+    }
+
+    func bump(): String {
+        val c = this.peek()
+        this.pos += 1
+        if (c == "\n") {
+            this.line += 1
+            this.col = 1
+        } else {
+            unless (c == "") { this.col += byteWidth(c) }
+        }
+        return c
+    }
+
+    proc emit(kind: String, text: String, atLine: Int, atCol: Int) {
+        this.out.add(Token(kind, text, atLine, atCol, []))
+        this.lastKind = kind
+    }
+
+    proc emitStr(parts: List<Part>, atLine: Int, atCol: Int) {
+        this.out.add(Token("str", "", atLine, atCol, parts))
+        this.lastKind = "str"
+    }
+
+    proc maybeSemi() {
+        val n = this.brackets.size
+        if (n > 0 and (this.brackets[n - 1] == "(" or this.brackets[n - 1] == "[")) {
+            return
+        }
+        if (endsStatement(this.lastKind)) {
+            this.emit(";", "", this.line, this.col)
+        }
+    }
+
+    /// Prints the failure the way the oracle does, and gives up. The prefix
+    /// is empty for the token-dump driver; the checker's loader sets it to
+    /// `path:` so a failure inside an imported module names its file.
+    proc fail(atLine: Int, atCol: Int, msg: String) {
+        println("error ${lexErrorPrefix}${atLine}:${atCol} ${msg}")
+        exit(1)
+    }
+
+    proc run() {
+        // A leading shebang belongs to the shell, not the program.
+        if (this.allowShebang and this.peek() == "#" and this.peekAt(1) == "!") {
+            while (this.peek() != "\n" and this.peek() != "") {
+                this.bump()
+            }
+        }
+
+        while (true) {
+            // Whitespace and comments, with newlines feeding the ASI.
+            var skipping = true
+            while (skipping) {
+                val c = this.peek()
+                if (c == " " or c == "\t" or c == "\r") {
+                    this.bump()
+                } else if (c == "\n") {
+                    this.bump()
+                    this.maybeSemi()
+                } else if (c == "/" and this.peekAt(1) == "/") {
+                    while (this.peek() != "\n" and this.peek() != "") {
+                        this.bump()
+                    }
+                } else if (c == "/" and this.peekAt(1) == "*") {
+                    val startLine = this.line
+                    val startCol = this.col
+                    this.bump()
+                    this.bump()
+                    var depth = 1
+                    while (depth > 0) {
+                        val d = this.peek()
+                        if (d == "") {
+                            this.fail(startLine, startCol, "unterminated block comment")
+                            return
+                        } else if (d == "/" and this.peekAt(1) == "*") {
+                            this.bump()
+                            this.bump()
+                            depth += 1
+                        } else if (d == "*" and this.peekAt(1) == "/") {
+                            this.bump()
+                            this.bump()
+                            depth -= 1
+                        } else {
+                            this.bump()
+                        }
+                    }
+                } else {
+                    skipping = false
+                }
+            }
+
+            val tokLine = this.line
+            val tokCol = this.col
+            val c = this.peek()
+
+            if (c == "") {
+                this.maybeSemi()
+                this.emit("eof", "", tokLine, tokCol)
+                return
+            }
+            if (isDigit(c)) {
+                this.number(tokLine, tokCol)
+                continue
+            }
+            if (isAlpha(c)) {
+                this.word(tokLine, tokCol)
+                continue
+            }
+            if (c == "\"") {
+                this.stringToken(tokLine, tokCol)
+                continue
+            }
+            this.operator(tokLine, tokCol)
+        }
+    }
+
+    proc operator(tokLine: Int, tokCol: Int) {
+        val c = this.bump()
+        val kind = when (c) {
+            "+" -> {
+                if (this.peek() == "+") { this.bump(); "++" }
+                else { this.pick("=", "+=", "+") }
+            }
+            "-" -> {
+                if (this.peek() == "=") { this.bump(); "-=" }
+                else if (this.peek() == ">") { this.bump(); "->" }
+                else if (this.peek() == "-") { this.bump(); "--" }
+                else { "-" }
+            }
+            "*" -> {
+                if (this.peek() == "*") {
+                    this.bump()
+                    this.pick("=", "**=", "**")
+                } else {
+                    this.pick("=", "*=", "*")
+                }
+            }
+            "/" -> this.pick("=", "/=", "/")
+            "%" -> this.pick("=", "%=", "%")
+            // kealsql: `===` and `!==`, the null-safe pair, one more
+            // character than the question they refine.
+            "=" -> {
+                if (this.peek() == "=") {
+                    this.bump()
+                    if (this.peek() == "=") { this.bump(); "===" } else { "==" }
+                } else { "=" }
+            }
+            "!" -> {
+                if (this.peek() == "=") {
+                    this.bump()
+                    if (this.peek() == "=") { this.bump(); "!==" } else { "!=" }
+                }
+                else if (this.peek() == "!") { this.bump(); "!!" }
+                else { "!" }
+            }
+            "<" -> {
+                if (this.peek() == "=") {
+                    this.bump()
+                    // `<=`, then `<=>`, then `<==>`: each one more character,
+                    // and each a different question.
+                    if (this.peek() == ">") {
+                        this.bump()
+                        "<=>"
+                    } else if (this.peek() == "=" and this.peekAt(1) == ">") {
+                        this.bump()
+                        this.bump()
+                        "<==>"
+                    } else {
+                        "<="
+                    }
+                } else {
+                    "<"
+                }
+            }
+            ">" -> this.pick("=", ">=", ">")
+            "&" -> {
+                unless (this.peek() == "&") {
+                    this.fail(tokLine, tokCol, "unexpected `&` (did you mean `&&`?)")
+                }
+                this.bump()
+                "&&"
+            }
+            "|" -> {
+                unless (this.peek() == "|") {
+                    this.fail(tokLine, tokCol, "unexpected `|` (did you mean `||`?)")
+                }
+                this.bump()
+                "||"
+            }
+            "^" -> {
+                if (this.peek() == "/") {
+                    this.bump()
+                    this.pick("=", "^/=", "^/")
+                } else {
+                    "^"
+                }
+            }
+            "?" -> {
+                if (this.peek() == ".") { this.bump(); "?." }
+                else if (this.peek() == ":") { this.bump(); "?:" }
+                else { "?" }
+            }
+            "." -> this.pick(".", "..", ".")
+            "," -> ","
+            ":" -> ":"
+            ";" -> ";"
+            "(", "{", "[" -> {
+                this.brackets.add(c)
+                c
+            }
+            ")", "}", "]" -> {
+                if (this.brackets.size > 0) {
+                    this.brackets.removeAt(this.brackets.size - 1)
+                }
+                c
+            }
+            else -> {
+                this.fail(tokLine, tokCol, "unexpected character `${c}`")
+                ""
+            }
+        }
+        this.emit(kind, "", tokLine, tokCol)
+    }
+
+    func pick(next: String, yes: String, no: String): String {
+        if (this.peek() == next) {
+            this.bump()
+            return yes
+        }
+        return no
+    }
+
+    proc word(tokLine: Int, tokCol: Int) {
+        var text = ""
+        while (isAlnum(this.peek())) {
+            text += this.bump()
+        }
+        val kw = keywordOf(text)
+        if (kw == "") {
+            this.emit("ident", text, tokLine, tokCol)
+        } else {
+            this.emit(kw, "", tokLine, tokCol)
+        }
+    }
+
+    proc number(tokLine: Int, tokCol: Int) {
+        // `0x` and `0b` write a bit pattern rather than a magnitude, which is
+        // why they are here at all: a mask is read by its digits, and
+        // `16711935` is not a thing anyone reads.
+        val ahead = this.peekAt(1)
+        val isRadix = ahead == "x" or ahead == "X" or ahead == "b" or ahead == "B"
+        if (this.peek() == "0" and isRadix) {
+            val bits = if (ahead == "x" or ahead == "X") { 4 } else { 1 }
+            val base = 1 shl bits
+            this.bump()
+            val prefix = this.bump()
+            var raw = ""
+            while (digitInBase(this.peek(), base) or this.peek() == "_") {
+                raw += this.bump()
+            }
+            val digits = raw.replace("_", "")
+            if (digits == "") {
+                this.fail(tokLine, tokCol, "`0${prefix}` needs at least one digit after it")
+                return
+            }
+            val v = radixToInt(digits, bits)
+            if (v == null) {
+                this.fail(
+                    tokLine,
+                    tokCol,
+                    "integer literal `0${prefix}${digits}` does not fit in Int"
+                )
+                return
+            }
+            this.emit("int", "${v}", tokLine, tokCol)
+            return
+        }
+        var text = ""
+        while (isDigit(this.peek()) or this.peek() == "_") {
+            text += this.bump()
+        }
+        // `1..10` is a range, not `1.` and `.10`.
+        var isFloat = false
+        if (this.peek() == "." and isDigit(this.peekAt(1))) {
+            isFloat = true
+            text += this.bump()
+            while (isDigit(this.peek()) or this.peek() == "_") {
+                text += this.bump()
+            }
+        }
+        if (this.peek() == "e" or this.peek() == "E") {
+            // The reference restores the position but not the column when
+            // this turns out not to be an exponent — reproduced faithfully.
+            val save = this.pos
+            var trial = text + this.bump()
+            if (this.peek() == "+" or this.peek() == "-") {
+                trial += this.bump()
+            }
+            if (isDigit(this.peek())) {
+                while (isDigit(this.peek())) {
+                    trial += this.bump()
+                }
+                val stripped = trial.replace("_", "")
+                val f = stripped.toFloat()
+                if (f == null) {
+                    this.fail(tokLine, tokCol, "invalid float literal `${stripped}`")
+                    return
+                }
+                this.emit("float", "${f}", tokLine, tokCol)
+                return
+            }
+            this.pos = save
+        }
+        val stripped = text.replace("_", "")
+        if (isFloat) {
+            val f = stripped.toFloat()
+            if (f == null) {
+                this.fail(tokLine, tokCol, "invalid float literal `${stripped}`")
+                return
+            }
+            this.emit("float", "${f}", tokLine, tokCol)
+        } else {
+            val n = stripped.toInt()
+            if (n == null) {
+                this.fail(
+                    tokLine,
+                    tokCol,
+                    "integer literal `${stripped}` does not fit in Int"
+                )
+                return
+            }
+            this.emit("int", "${n}", tokLine, tokCol)
+        }
+    }
+
+    proc stringToken(tokLine: Int, tokCol: Int) {
+        // """ opens a raw string: no escapes, no interpolation.
+        if (this.peekAt(1) == "\"" and this.peekAt(2) == "\"") {
+            this.bump()
+            this.bump()
+            this.bump()
+            var text = ""
+            while (true) {
+                if (this.peek() == "") {
+                    this.fail(tokLine, tokCol, "unterminated raw string")
+                    return
+                }
+                if (this.peek() == "\"" and this.peekAt(1) == "\""
+                    and this.peekAt(2) == "\"") {
+                    this.bump()
+                    this.bump()
+                    this.bump()
+                    this.emitStr([Part(true, text, tokLine, tokCol)], tokLine, tokCol)
+                    return
+                }
+                text += this.bump()
+            }
+        }
+
+        this.bump() // opening quote
+        val parts: List<Part> = []
+        var buf = ""
+        var open = true
+        while (open) {
+            val c = this.peek()
+            if (c == "" or c == "\n") {
+                this.fail(tokLine, tokCol, "unterminated string literal")
+                return
+            } else if (c == "\"") {
+                this.bump()
+                open = false
+            } else if (c == "\\") {
+                this.bump()
+                val escLine = this.line
+                val escCol = this.col
+                val e = this.bump()
+                buf += when (e) {
+                    "n" -> "\n"
+                    "t" -> "\t"
+                    "r" -> "\r"
+                    "0" -> "\u{0}"
+                    "\\" -> "\\"
+                    "\"" -> "\""
+                    "$" -> "$"
+                    "u" -> this.unicodeEscape(escLine, escCol)
+                    else -> {
+                        this.fail(escLine, escCol, "unknown escape `\\${e}`")
+                        ""
+                    }
+                }
+            } else if (c == "$") {
+                val dollarLine = this.line
+                val dollarCol = this.col
+                this.bump()
+                if (this.peek() == "{") {
+                    this.bump()
+                    val innerLine = this.line
+                    val innerCol = this.col
+                    var srcText = ""
+                    var depth = 1
+                    var scanning = true
+                    while (scanning) {
+                        val d = this.peek()
+                        if (d == "") {
+                            this.fail(dollarLine, dollarCol, "unterminated `${"$"}{...}`")
+                            return
+                        } else if (d == "{") {
+                            depth += 1
+                            srcText += this.bump()
+                        } else if (d == "}") {
+                            depth -= 1
+                            if (depth == 0) {
+                                scanning = false
+                            } else {
+                                srcText += this.bump()
+                            }
+                        } else {
+                            srcText += this.bump()
+                        }
+                    }
+                    this.bump() // closing }
+                    unless (buf == "") {
+                        parts.add(Part(true, buf, tokLine, tokCol))
+                        buf = ""
+                    }
+                    parts.add(Part(false, srcText, innerLine, innerCol))
+                } else if (isAlpha(this.peek())) {
+                    val innerLine = this.line
+                    val innerCol = this.col
+                    var name = ""
+                    while (isAlnum(this.peek())) {
+                        name += this.bump()
+                    }
+                    unless (buf == "") {
+                        parts.add(Part(true, buf, tokLine, tokCol))
+                        buf = ""
+                    }
+                    parts.add(Part(false, name, innerLine, innerCol))
+                } else {
+                    buf += "$"
+                }
+            } else {
+                buf += this.bump()
+            }
+        }
+        if (buf != "" or parts.size == 0) {
+            parts.add(Part(true, buf, tokLine, tokCol))
+        }
+        this.emitStr(parts, tokLine, tokCol)
+    }
+
+    func unicodeEscape(escLine: Int, escCol: Int): String {
+        unless (this.peek() == "{") {
+            this.fail(escLine, escCol, "expected `{` after `\\u`")
+            return ""
+        }
+        this.bump()
+        var hex = ""
+        while (this.peek() != "}") {
+            if (this.peek() == "") {
+                this.fail(escLine, escCol, "unterminated `\\u{...}` escape")
+                return ""
+            }
+            hex += this.bump()
+        }
+        this.bump()
+        val code = hexToInt(hex)
+        if (code == null) {
+            this.fail(escLine, escCol, "invalid hex in `\\u{...}`")
+            return ""
+        }
+        // A valid scalar: below 0x110000 and outside the surrogate range.
+        if (code >= 1114112 or (code >= 55296 and code < 57344)) {
+            this.fail(escLine, escCol, "invalid unicode scalar value")
+            return ""
+        }
+        return code.toChar()
+    }
+}
+
+/// The value of one digit in base 16 or below, or -1 for a character that
+/// is not one.
+func digitValue(c: String): Int {
+    return when {
+        isDigit(c) -> c.code() - 48
+        c >= "a" and c <= "f" -> c.code() - 87
+        c >= "A" and c <= "F" -> c.code() - 55
+        else -> -1
+    }
+}
+
+/// True when `c` is a digit of this base. What is not one ends the literal
+/// rather than spoiling it: `0b12` is `0b1` followed by `2`, which is what
+/// the oracle does and therefore what this must do.
+func digitInBase(c: String, base: Int): Bool {
+    val d = digitValue(c)
+    return d >= 0 and d < base
+}
+
+/// The value of a `0x` or `0b` literal's digits, or null when they name more
+/// bits than an Int holds. The digits are a bit pattern rather than a
+/// magnitude, so the top bit set is a negative Int — the same 64 bits the
+/// bit operators are defined on.
+func radixToInt(digits: String, bits: Int): Int? {
+    if (digits == "") { return null }
+    val base = 1 shl bits
+    val top = 64 - bits
+    var n = 0
+    for (c in digits) {
+        val d = digitValue(c)
+        if (d < 0 or d >= base) { return null }
+        // What is about to leave the top has to be nothing, or the digits
+        // name more than an Int holds.
+        if ((n ushr top) != 0) { return null }
+        n = (n shl bits) bor d
+    }
+    return n
+}
+
+func hexToInt(hex: String): Int? {
+    if (hex == "") { return null }
+    var n = 0
+    for (c in hex) {
+        val d = digitValue(c)
+        if (d < 0) { return null }
+        if (n > 268435455) { return null }   // would exceed 32 bits shifted
+        n = n * 16 + d
+    }
+    return n
+}
+
+
+/// Lexes a whole file.
+package func lexFile(source: String): List<Token> {
+    val lx = Lexer(source, 1, 1, true)
+    lx.run()
+    return lx.out
+}
+
+/// Lexes an interpolation hole, whose text starts at the given position.
+package func lexFragment(source: String, atLine: Int, atCol: Int): List<Token> {
+    val lx = Lexer(source, atLine, atCol, false)
+    lx.run()
+    return lx.out
+}
+
+/// The one line `keal tokens` prints for this token.
+package func tokenDumpLine(t: Token): String {
+    if (t.kind == "str") {
+        var lineOut = "${t.line}:${t.col} str"
+        for (p in t.parts) {
+            if (p.isLit) {
+                lineOut += " lit(" + esc(p.text) + ")"
+            } else {
+                lineOut += " interp(${p.line}:${p.col} " + esc(p.text) + ")"
+            }
+        }
+        return lineOut
+    }
+    var lineOut = "${t.line}:${t.col} ${t.kind}"
+    unless (t.text == "") { lineOut += " " + t.text }
+    return lineOut
+}
+
+/// How a token reads in an error message — `describe` in the reference.
+package func describeToken(t: Token): String {
+    return when (t.kind) {
+        "int" -> "integer `${t.text}`"
+        "float" -> "float `${t.text}`"
+        "str" -> "string literal"
+        "ident" -> "`${t.text}`"
+        "eof" -> "end of file"
+        ";" -> "end of statement"
+        else -> "`${t.kind}`"
+    }
+}

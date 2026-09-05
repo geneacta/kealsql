@@ -1,0 +1,1 @@
+error tests/errors/set-null-on-required.kealsql:4:13 `setNull` needs an optional reference: `RefId<User>?`

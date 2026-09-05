@@ -1,0 +1,5 @@
+table User { id: Id
+    name: Slug }
+func f(): List<Int> {
+    from(User).select(name)
+}

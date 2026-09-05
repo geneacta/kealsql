@@ -1,0 +1,1 @@
+error tests/errors/ref-id-without-id.kealsql:6:5 `RefId<Session>` needs `Session` to declare an `Id`; its primary is `token: Uuid`, so write `Ref<Session.token>`

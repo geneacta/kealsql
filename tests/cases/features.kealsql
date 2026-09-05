@@ -1,0 +1,109 @@
+// Every construct the first version knows, in one file.
+
+enum Role { Admin, Member }
+
+table Org {
+    id:   Id
+    name: Slug
+}
+
+table Account {
+    id:      Id
+    org:     RefSlug<Org>
+    unique login: String(32)
+    role:    Role
+    age:     Int?
+    unique(org, login)
+}
+
+table Session {
+    primary token: Uuid
+    account: RefId<Account>
+    note:    String?
+}
+
+table Audit {
+    id:      Id
+    session: Ref<Session.token>
+    cascade byLogin: Ref<Account.login>
+}
+
+// Bool3 from a comparison on an optional column: `>=` is not warned about.
+func adults(): List<Account> {
+    from(Account).where(age >= 18).select(*)
+}
+
+// `== null` is IS NULL, a plain Bool.
+func withoutAge(): List<String> {
+    from(Account).where(age == null).select(login)
+}
+
+// `==` on an optional draws the warning; `===` never does.
+func sameAge(years: Int?): List<Int> {
+    from(Account).where(age == years).select(id)
+}
+
+func sameAgeStrict(years: Int?): List<Int> {
+    from(Account).where(age === years).select(id)
+}
+
+// A where after groupBy is HAVING; an aggregate in select.
+func crowdedRoles(): List<(Role, Int)> {
+    from(Account).groupBy(role).where(count(*) > 1).select(role, count(*))
+}
+
+// A closed when over an enum needs no else.
+func label(acc: Int): String? {
+    from(Account).where(id == acc).select(when (role) {
+        Admin -> "admin"
+        Member -> "member"
+    }).first()
+}
+
+// A reference by slug joins on the slug.
+func orgOf(acc: Int): String? {
+    from(Account as a).where(a.id == acc).select(a.org.name).first()
+}
+
+// Two steps along references, and a default for an optional.
+func auditNotes(): List<(Int, String)> {
+    from(Audit as au).orderBy(au.id).select(au.id, au.session.note ?: "")
+}
+
+// A val-bound fragment as a subquery.
+func oldMembers(): List<Int> {
+    val members = from(Account).where(role == Member)
+    from(Account).where(id in members.select(id)).where(age ?: 0 > 60).select(id)
+}
+
+func hasLogin(l: String): Bool {
+    from(Account).where(login == l).exists()
+}
+
+func admins(): Int {
+    from(Account).where(role == Admin and age != null).count()
+}
+
+func page(n: Int): List<String> {
+    from(Account).orderBy(age.desc.nullsLast, login).limit(10).offset(n * 10).distinct().select(login)
+}
+
+func byAccount(acc: Int): List<(Int, String)> {
+    from(Session as s).join(Audit as a, a.session == s.token).where(s.account == acc).select(a.id, a.byLogin)
+}
+
+func search(pattern: String): List<String> {
+    from(Account).unless(login.like(pattern) or login.lower().startsWith("x")).select(login)
+}
+
+func newAccount(org: String, login: String, role: Role): Account {
+    insert(Account(org = org, login = login, role = role))
+}
+
+proc rename(acc: Int, newLogin: String) {
+    update(Account).where(id == acc).set(login = newLogin, age = null)
+}
+
+proc dropSessions(acc: Int) {
+    delete(Session).where(account == acc)
+}

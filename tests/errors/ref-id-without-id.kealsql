@@ -1,0 +1,7 @@
+table Session {
+    primary token: Uuid
+}
+table Audit {
+    id: Id
+    session: RefId<Session>
+}

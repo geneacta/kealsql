@@ -1,0 +1,1 @@
+error tests/errors/mixed-connectives.kealsql:4:45 `or` and `and` need parentheses to say which applies first

@@ -1,0 +1,1 @@
+error tests/errors/update-without-where.kealsql:4:5 `update` without `where` touches every row; write `.where(true)` to mean that

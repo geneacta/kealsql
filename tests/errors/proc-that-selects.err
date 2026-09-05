@@ -1,0 +1,1 @@
+error tests/errors/proc-that-selects.kealsql:3:15 a `proc` returns nothing; a query that answers something is a `func`

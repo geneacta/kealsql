@@ -1,0 +1,41 @@
+enum Status { Draft, Published }
+
+table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    bio:     String?
+}
+
+table Post {
+    id:       Id
+    cascade author: RefId<User>
+    editor:   RefId<User>?
+    title:    String
+    status:   Status
+    created:  Timestamp
+}
+
+func byAuthor(name: String): List<(Int, String)> {
+    from(Post as p)
+        .where(p.author.name == name)
+        .where(status == Published)
+        .orderBy(created.desc)
+        .select(p.id, p.title)
+}
+
+func editorOf(post: Int): String? {
+    from(Post).where(id == post).select(editor?.name).first()
+}
+
+func drafts(): Int {
+    from(Post).where(status == Draft).count()
+}
+
+func publish(post: Int): Post {
+    update(Post).where(id == post).set(status = Published)
+}
+
+proc forget(user: RefId<User>) {
+    delete(Post).where(author == user)
+}

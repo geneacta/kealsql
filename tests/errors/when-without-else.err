@@ -1,0 +1,1 @@
+error tests/errors/when-without-else.kealsql:4:23 a `when` that produces a value needs an `else` arm

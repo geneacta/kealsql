@@ -1,0 +1,102 @@
+// The resolved schema: what the checker knows about tables once the
+// declarations have been validated. Column types are reduced to the scalar
+// they store, references keep their target.
+
+import "./ast.keal"
+
+/// A scalar type as the checker reasons about it. `name` is one of
+/// Int Float Bool Bool3 String Uuid Bytea Date Timestamp Comp, an enum's
+/// name, `row:<Table>`, `tuple`, or `fragment` for an unfinished pipeline.
+package record Ty(package val name: String, package val optional: Bool) {
+    package func withOptional(o: Bool): Ty { Ty(this.name, o) }
+    package func render(): String { if (this.optional) { "${this.name}?" } else { this.name } }
+}
+
+package class Column(package val name: String, package val decl: ColumnN) {
+    package var scalar: String = ""          // what the column stores, as a Ty name
+    package var optional: Bool = false
+    package var isPrimary: Bool = false
+    package var isSlug: Bool = false
+    package var isUnique: Bool = false
+    package var isSerial: Bool = false       // takes a default; never named in an insert
+    package var refTable: String = ""        // non-empty for a reference
+    package var refColumn: String = ""
+    package var onDelete: String = ""        // RESTRICT / CASCADE / SET NULL
+    package var onUpdate: String = ""        // CASCADE for a slug reference
+    package var len: Int = 0
+
+    package func ty(): Ty { Ty(this.scalar, this.optional) }
+}
+
+package class Table(package val name: String, package val decl: TableN) {
+    package var columns: List<Column> = []
+    package var primary: Column? = null
+    package var slug: Column? = null
+    package var hasId: Bool = false          // declared with the `Id` shorthand
+    package var hasSlug: Bool = false        // declared with the `Slug` shorthand
+
+    package func column(name: String): Column? { this.columns.find({ it.name == name }) }
+}
+
+package class Schema() {
+    package var enums: Map<String, EnumN> = {}
+    package var tables: Map<String, Table> = {}
+    package var tableOrder: List<String> = []
+
+    package func isEnum(name: String): Bool { this.enums.containsKey(name) }
+    package func enumHas(enumName: String, value: String): Bool {
+        val e = this.enums[enumName]
+        if (e == null) { return false }
+        return e.values.contains(value)
+    }
+}
+
+/// The SQL type a scalar is stored or declared as.
+package func sqlType(scalar: String, len: Int, schema: Schema): String {
+    return when (scalar) {
+        "Int" -> "integer"
+        "BigInt" -> "bigint"
+        "Float" -> "double precision"
+        "Bool" -> "boolean"
+        "String" -> if (len > 0) { "varchar(${len})" } else { "text" }
+        "Uuid" -> "uuid"
+        "Bytea" -> "bytea"
+        "Date" -> "date"
+        "Timestamp" -> "timestamp"
+        else -> if (schema.isEnum(scalar)) { sqlName(scalar) } else { scalar.toLower() }
+    }
+}
+
+/// SQL words that cannot be a bare identifier in PostgreSQL. A name that
+/// lands on one is emitted quoted.
+func isSqlReserved(w: String): Bool {
+    return when (w) {
+        "user", "order", "group", "select", "from", "where", "table", "column",
+        "to", "in", "is", "as", "on", "or", "and", "not", "null", "true",
+        "false", "default", "primary", "references", "unique", "check",
+        "limit", "offset", "join", "union", "case", "when", "then", "else",
+        "end", "all", "any", "some", "distinct", "having", "into", "values",
+        "create", "drop", "alter", "grant", "with", "for", "using", "only",
+        "desc", "asc", "between", "both", "cast", "collate", "constraint",
+        "current_date", "current_time", "current_timestamp", "current_user",
+        "session_user", "localtime", "localtimestamp", "leading", "trailing",
+        "symmetric", "asymmetric", "array", "except", "intersect", "fetch",
+        "window", "returning", "placing", "analyse", "analyze", "deferrable",
+        "initially", "lateral", "variadic", "do", "then" -> true
+        else -> false
+    }
+}
+
+/// `fullName` → `full_name`, `Post` → `post`; quoted when SQL has taken the word.
+package func sqlName(name: String): String {
+    var out = ""
+    var i = 0
+    for (c in name) {
+        val lower = c.toLower()
+        if (c != lower and i > 0) { out += "_" }
+        out += lower
+        i += 1
+    }
+    if (isSqlReserved(out)) { return "\"" + out + "\"" }
+    return out
+}

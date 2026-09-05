@@ -1,0 +1,5 @@
+table User { id: Id
+    name: Slug }
+proc f() {
+    update(User).set(name = "x")
+}

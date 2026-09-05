@@ -1,0 +1,6 @@
+table User { id: Id
+    name: Slug
+    email: String }
+func f(n: String): User {
+    insert(User(name = n))
+}

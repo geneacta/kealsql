@@ -1,0 +1,1 @@
+error tests/errors/param-shadows-column.kealsql:4:22 `name` is both a parameter and a column of `User`; rename the parameter

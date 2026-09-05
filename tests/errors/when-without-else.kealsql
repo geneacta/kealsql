@@ -1,0 +1,5 @@
+table User { id: Id
+    age: Int }
+func f(): List<String> {
+    from(User).select(when { age > 3 -> "old" })
+}

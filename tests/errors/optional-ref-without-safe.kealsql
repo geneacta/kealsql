@@ -1,0 +1,7 @@
+table User { id: Id
+    name: Slug }
+table Post { id: Id
+    editor: RefId<User>? }
+func f(): List<String> {
+    from(Post).select(editor.name)
+}

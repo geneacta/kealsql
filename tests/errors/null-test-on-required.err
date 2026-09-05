@@ -1,0 +1,1 @@
+error tests/errors/null-test-on-required.kealsql:4:27 `"user".name` is never null; the test is always false

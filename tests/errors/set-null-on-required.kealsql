@@ -1,0 +1,5 @@
+table User { id: Id }
+table Post {
+    id: Id
+    setNull author: RefId<User>
+}

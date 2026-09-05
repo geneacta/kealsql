@@ -1,0 +1,36 @@
+import "./parser.keal"
+func dumpEx(e: Ex): String {
+    return when (e.kind) {
+        "int", "float", "str", "bool", "comp", "ident" -> "${e.kind}:${e.text}"
+        "null", "unknown", "star" -> e.kind
+        "alias" -> "alias:${e.text}=${e.kids[0].text}"
+        "unary" -> "(${e.text} ${dumpEx(e.kids[0])})"
+        "binary", "logical", "elvis" -> "(${dumpEx(e.kids[0])} ${e.text} ${dumpEx(e.kids[1])})"
+        "notnull" -> "(${dumpEx(e.kids[0])}!!)"
+        "field" -> "${dumpEx(e.kids[0])}${if (e.safe) { "?." } else { "." }}${e.text}"
+        "method" -> "${dumpEx(e.kids[0])}${if (e.safe) { "?." } else { "." }}${e.text}(${dumpArgs(e.args)})"
+        "call" -> "${e.text}(${dumpArgs(e.args)})"
+        "list" -> "[${e.kids.map({ dumpEx(it) }).join(", ")}]"
+        "when" -> "when(${e.arms.size} arms)"
+        else -> "?${e.kind}"
+    }
+}
+func dumpArgs(args: List<ArgN>): String {
+    return args.map({ if (it.name == "") { dumpEx(it.value) } else { "${it.name} = ${dumpEx(it.value)}" } }).join(", ")
+}
+val src = readFile(args()[0])
+if (src == null) { println("cannot read"); exit(1) }
+val p = parseFile(args()[0], src)
+for (e in p.enums) { println("enum ${e.name} { ${e.values.join(", ")} }") }
+for (t in p.tables) {
+    println("table ${t.name}")
+    for (c in t.columns) { println("  ${c.mods.join(" ")} ${c.name}: ${c.ty.render()}") }
+    for (u in t.uniques) { println("  unique(${u.join(", ")})") }
+}
+for (f in p.funs) {
+    val r = f.ret
+    println("${if (f.isFunc) { "func" } else { "proc" }} ${f.name}(${f.params.map({ "${it.name}: ${it.ty.render()}" }).join(", ")})${if (r != null) { ": " + r.render() } else { "" }}")
+    for (b in f.bindings) { println("  val ${b.name} = ${dumpEx(b.ex)}") }
+    val body = f.body
+    if (body != null) { println("  ${dumpEx(body)}") }
+}

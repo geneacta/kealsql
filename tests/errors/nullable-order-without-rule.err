@@ -1,0 +1,1 @@
+error tests/errors/nullable-order-without-rule.kealsql:4:24 `"user".age` is optional; say where its nulls go: `.nullsFirst` or `.nullsLast`

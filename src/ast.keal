@@ -1,0 +1,89 @@
+// The KealSql syntax tree. One class per declaration kind, and a single
+// `Ex` class for expressions with a `kind` string — the shape the Keal
+// self-hosted compiler uses, so that anyone who has read one can read the
+// other.
+
+/// A type as written: `String(15)`, `RefId<User>?`, `Ref<User.email>`,
+/// `List<(Int, String)>`. `name` is the head word; a tuple has name "tuple".
+package class TypeN(package val name: String, package val line: Int, package val col: Int) {
+    package var optional: Bool = false
+    package var len: Int = 0                 // String(n); 0 when unbounded
+    package var refTable: String = ""        // RefId / RefSlug / Ref
+    package var refColumn: String = ""       // Ref<T.c>
+    package var args: List<TypeN> = []       // List<T>; the members of a tuple
+
+    package func render(): String {
+        var s = when (this.name) {
+            "Ref" -> "Ref<${this.refTable}.${this.refColumn}>"
+            "RefId", "RefSlug" -> "${this.name}<${this.refTable}>"
+            "List" -> "List<${this.args[0].render()}>"
+            "tuple" -> "(${this.args.map({ it.render() }).join(", ")})"
+            "String" -> if (this.len > 0) { "String(${this.len})" } else { "String" }
+            else -> this.name
+        }
+        if (this.optional) { s += "?" }
+        return s
+    }
+}
+
+package class ColumnN(package val name: String, package val ty: TypeN, package val line: Int, package val col: Int) {
+    package var mods: List<String> = []      // in source order
+
+    package func has(mod: String): Bool { this.mods.contains(mod) }
+}
+
+package class TableN(package val name: String, package val line: Int, package val col: Int) {
+    package var columns: List<ColumnN> = []
+    package var uniques: List<List<String>> = []   // unique(a, b) constraints
+
+    package func column(name: String): ColumnN? { this.columns.find({ it.name == name }) }
+}
+
+package class EnumN(package val name: String, package val line: Int, package val col: Int) {
+    package var values: List<String> = []
+}
+
+package class ParamN(package val name: String, package val ty: TypeN, package val line: Int, package val col: Int)
+
+/// `val name = fragment` inside a query body.
+package class BindN(package val name: String, package val ex: Ex, package val line: Int, package val col: Int)
+
+/// A `func` (query, returns) or a `proc` (mutation, returns nothing).
+package class FunN(package val name: String, package val isFunc: Bool, package val line: Int, package val col: Int) {
+    package var params: List<ParamN> = []
+    package var ret: TypeN? = null
+    package var bindings: List<BindN> = []
+    package var body: Ex? = null             // the pipeline; null only after a parse failure
+}
+
+package class ArgN(package val name: String, package val value: Ex)   // name "" when positional
+
+/// A `when` arm: `values -> body`, or `else -> body`.
+package class ArmN(package val line: Int, package val col: Int) {
+    package var isElse: Bool = false
+    package var values: List<Ex> = []
+    package var body: Ex? = null
+}
+
+/// Expressions. kind is one of:
+///   int float str bool null unknown comp ident star alias
+///   unary binary logical elvis notnull
+///   call field method list when
+/// `text` holds the literal, the name, or the operator; `safe` marks `?.`.
+/// `alias` is `Table as t` where a call expects one; `star` is a bare `*`.
+package class Ex(package val kind: String, package val line: Int, package val col: Int) {
+    package var text: String = ""
+    package var iVal: Int = 0
+    package var kids: List<Ex> = []          // operands; receiver first for field/method
+    package var args: List<ArgN> = []        // call / method arguments
+    package var safe: Bool = false           // field / method reached through `?.`
+    package var subject: Ex? = null          // when
+    package var arms: List<ArmN> = []        // when
+}
+
+package class ProgramN() {
+    package var imports: List<String> = []
+    package var enums: List<EnumN> = []
+    package var tables: List<TableN> = []
+    package var funs: List<FunN> = []
+}

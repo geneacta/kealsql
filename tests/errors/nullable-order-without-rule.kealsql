@@ -1,0 +1,5 @@
+table User { id: Id
+    age: Int? }
+func f(): List<Int> {
+    from(User).orderBy(age).select(id)
+}

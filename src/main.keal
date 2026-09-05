@@ -1,0 +1,21 @@
+// kealsql — the KealSql compiler. `keal src/main.keal file.kealsql` prints the
+// SQL for the file: the schema as CREATE statements, then one PREPARE per
+// `func` or `proc`. Errors go to standard output as `error file:L:C ...`
+// and exit 1, the way Keal reports its own.
+
+import "./parser.keal"
+import "./compile.keal"
+
+val argv = args()
+if (argv.size != 1) {
+    println("usage: kealsql <file.kealsql>")
+    exit(2)
+}
+val path = argv[0]
+val source = readFile(path)
+if (source == null) {
+    println("error: cannot read `${path}`")
+    exit(1)
+}
+val program = parseFile(path, source)
+print(Compiler(path, program).compile())

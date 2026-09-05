@@ -1,0 +1,1 @@
+error tests/errors/result-type-mismatch.kealsql:3:11 `f` is declared `List<Int>` but its query produces `List<String>`

@@ -1,0 +1,5 @@
+table User { id: Id
+    age: Int? }
+func f(): List<Int> {
+    from(User).where(age == null or age > 3 and id > 1).select(id)
+}
