@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/kealsql.png" alt="KealSql" width="360"></p>
+
 # KealSql
 
 A Keal-shaped language over PostgreSQL. A `.kealsql` file declares a schema
