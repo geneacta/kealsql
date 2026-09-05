@@ -73,7 +73,7 @@ val program = parseFile(path, source)
 val compiler = Compiler(path, program)
 compiler.lib = lib
 if (plkealDir != "") {
-    compiler.resolveSchema()
+    compiler.compile()                       // checks everything and records the queries
     for (w in writePlkeal(compiler, plkealDir)) { println(w) }
 } else if (migrate) {
     compiler.resolveSchema()

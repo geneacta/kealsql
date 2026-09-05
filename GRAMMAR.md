@@ -236,6 +236,15 @@ called in expressions like any function, `slugify(name)`; its arguments
 are checked against the signature, and an optional argument makes the
 result optional — the function is STRICT, so a null never reaches it.
 
+Inside the body, every `func` and `proc` of the file is a Keal function
+with the same name and parameters, and a Keal result: `List<T>`, `T?`
+for `first()`, `T` for `single()` and for a mutation with a row back,
+`Int` for `count()`, `Bool` for `exists()`, nothing for a `proc`. A row is
+a `record`: the table's, for `select(*)` and mutations; one named after
+the query with a `Row` suffix and fields named after the selected columns,
+for several columns. A query that fails is a Keal exception (`try` catches
+it) carrying the query's name and PostgreSQL's message.
+
 ## 5. Expressions
 
 Keal's expression grammar, Keal's precedence — *tightest binding last*:

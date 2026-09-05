@@ -26,6 +26,18 @@ package class Val(package val sql: String, package val ty: Ty) {
 
 package class Param(package val name: String, package val index: Int, package val ty: Ty, package val sqlType: String)
 
+/// What a compiled `func` / `proc` is, for a stored function that calls it
+/// through SPI: its SQL, its parameters, and the shape of what it answers.
+/// kind: list first single count exists row none.
+package class QueryInfo(package val name: String, package val isFunc: Bool) {
+    package var sql: String = ""
+    package var params: List<Param> = []
+    package var kind: String = ""
+    package var colTys: List<Ty> = []
+    package var colNames: List<String> = []
+    package var rowTable: String = ""        // when the columns are one table's row
+}
+
 /// The pieces of one SELECT, gathered while walking the pipeline.
 package class Plan() {
     package var sources: List<Src> = []
@@ -40,6 +52,7 @@ package class Plan() {
     package var grouped: Bool = false
     package var selects: List<String> = []
     package var selectTys: List<Ty> = []
+    package var selectNames: List<String> = []   // a column's name when the expression is one; else "c<i>"
     package var terminal: String = ""        // select / count / exists
     package var fetch: String = ""           // first / single
     package var rowTable: String = ""        // select(*): the table
@@ -48,6 +61,7 @@ package class Plan() {
 package class Compiler(package val file: String, package val program: ProgramN) {
     package var schema: Schema = Schema()
     package var lib: String = ""             // the plkeal library path for CREATE FUNCTION; "" for $libdir
+    package var queries: List<QueryInfo> = []
     var params: List<Param> = []
     var bindings: Map<String, Ex> = {}
     var current: String = ""                 // the func being compiled, for messages
@@ -349,14 +363,19 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         val rootName = if (root.kind == "call") { root.text } else { "" }
         var sql = ""
         var produced = ""
+        val info = QueryInfo(f.name, f.isFunc)
         when (rootName) {
             "insert" -> {
                 val r = this.compileInsert(root, steps, f.isFunc)
                 sql = r[0]; produced = r[1]
+                info.kind = if (f.isFunc) { "row" } else { "none" }
+                info.rowTable = r[1]
             }
             "update", "delete" -> {
                 val r = this.compileMutation(root, steps, f.isFunc)
                 sql = r[0]; produced = r[1]
+                info.kind = if (f.isFunc) { "row" } else { "none" }
+                info.rowTable = r[1]
             }
             else -> {
                 val plan = Plan()
@@ -365,8 +384,19 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 unless (f.isFunc) { this.fail(body.line, body.col, "a `proc` returns nothing; a query that answers something is a `func`") }
                 sql = this.renderSelect(plan)
                 produced = this.producedType(plan)
+                info.kind = when (plan.terminal) {
+                    "count" -> "count"
+                    "exists" -> "exists"
+                    else -> if (plan.fetch == "") { "list" } else { plan.fetch }
+                }
+                info.colTys = plan.selectTys
+                info.colNames = plan.selectNames
+                if (plan.selectTys.size == 1 and plan.selectTys[0].name.startsWith("row:")) { info.rowTable = plan.selectTys[0].name.drop(4) }
             }
         }
+        info.sql = sql
+        info.params = this.params
+        this.queries.add(info)
         if (f.isFunc) {
             val declared = this.renderDeclared(f.ret!!)
             if (declared != produced) {
@@ -516,6 +546,10 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                             val e = this.emit(a.value, plan)
                             plan.selects.add(e.sql)
                             plan.selectTys.add(e.ty)
+                            val v = a.value
+                            var name = if (v.kind == "ident" or v.kind == "field") { v.text } else { "c${plan.selectNames.size}" }
+                            if (plan.selectNames.contains(name)) { name = "${name}${plan.selectNames.size}" }
+                            plan.selectNames.add(name)
                         }
                     }
                     if (plan.grouped) { this.checkGrouped(step, plan) }

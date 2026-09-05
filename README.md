@@ -67,8 +67,9 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least the commit that gave `runCommand` a standard input
-(`a9ad2cc`, after 1.2.0), which `--migrate` uses to talk to `psql`.
+`../keal` — at least `f4e6856` (after 1.2.0): `runCommand` with a standard
+input, which `--migrate` uses to talk to `psql`, and `keal_runtime_init`,
+which a stored function's library calls when PostgreSQL loads it.
 
 ```sh
 keal src/main.keal file.kealsql                          # print the SQL
@@ -102,8 +103,22 @@ func slugs(): List<(String, String)> {
 compiler against the server headers); the file's SQL carries the
 `CREATE FUNCTION`s. A panic inside becomes a SQL error, and the backend
 lives on. Values are `Int`, `Float`, `Bool`, `String`; the functions are
-STRICT, so a null answers null without a call. Not yet: reaching the
-database from inside one.
+STRICT, so a null answers null without a call.
+
+Inside a stored function, the file's own queries are Keal functions with
+Keal results — `userNamed(name)` answers a `User?`, a record; `posts(id)`
+a list of rows with fields named after the columns — and a query that
+fails is a Keal exception, rolled back, catchable with `try`:
+
+```
+stored func totalScore(name: String): Int {
+    val u = userNamed(name)
+    if (u == null) { return 0 }
+    var sum = 0
+    for (p in posts(u.id)) { sum += p.score ?: 0 }
+    return sum
+}
+```
 
 When PostgreSQL's `initdb` is on the machine, the suite also starts a
 private server in a temporary directory — no root, no configuration — loads
@@ -148,8 +163,8 @@ DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 `?:`, the eight connectives with Kleene's tables on `Bool3`, and reference
 paths as implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
-functions in Keal compiled to `LANGUAGE C`. Not yet: database access from
-inside a stored function (SPI), and native compilation of the compiler
-itself (`Nothing` in Keal's C backend).
+functions in Keal compiled to `LANGUAGE C`, calling the file's queries
+through SPI with typed results. Not yet: native compilation of the
+compiler itself (`Nothing` in Keal's C backend).
 
 Licensed under Apache-2.0, like Keal.

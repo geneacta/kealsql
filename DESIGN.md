@@ -39,16 +39,27 @@ run time.) The compiler can also *refuse* slow patterns — N+1, `like "%x"`
 without a trigram index, a join on an unindexed column — instead of letting
 them through.
 
-**`plkeal` — shipped, for pure functions.** Keal compiles through C11 and
-has C interop, so a function written in Keal becomes a `LANGUAGE C`
-function — the fastest procedural language PostgreSQL has, against an
-interpreted PL/pgSQL:
+**`plkeal` — shipped.** Keal compiles through C11 and has C interop, so a
+function written in Keal becomes a `LANGUAGE C` function — the fastest
+procedural language PostgreSQL has, against an interpreted PL/pgSQL — and
+it reaches the database through the file's own queries, typed:
 
 ```
 stored pure func slugify(s: String): String { ...ordinary Keal... }
 
 func slugs(): List<(String, String)> {
     from(User).select(name, slugify(name))       // typed, like any function
+}
+
+func userNamed(who: String): User? { from(User).where(name == who).select(*).first() }
+func posts(by: Int): List<(Int, String, Int?)> { from(Post).where(author == by).select(id, title, score) }
+
+stored func totalScore(name: String): Int {
+    val u = userNamed(name)                      // a User? — a record, generated
+    if (u == null) { return 0 }
+    var sum = 0
+    for (p in posts(u.id)) { sum += p.score ?: 0 }   // a PostsRow: fields named after the columns
+    return sum
 }
 ```
 
@@ -67,15 +78,36 @@ is the rule below, obeyed. The suite builds the library, loads it, runs
 the functions from prepared statements, and checks that a panic is a SQL
 error and the backend is still there afterwards.
 
-Not in this version: reaching the database from inside a stored function
-(SPI). That is the case where PostgreSQL would `longjmp` *through* Keal,
-and it waits for the shim discipline below to be applied to every SPI
-call. Two things the runtime needed, found by doing it: the program's
-`main` is what interns the string literals, so the entry points call
-`keal_init_literals()` from `_PG_init`; and a global must be right as C
-zeroes it (`var x: String? = null`), because that `main` never runs.
+**Queries from inside — SPI.** Every `func` / `proc` of the file is also a
+Keal function in the generated program, with Keal's types: a `select(*)`
+answers the table's `record`, several columns answer a record named after
+the query (`PostsRow`, fields named after the columns — never a tuple: a
+tuple holds five at most and a name beats a position), `first()` a `T?`,
+`count()` an `Int`, a `proc` nothing. Underneath, eleven `extern`
+functions carry arguments and cells as text (`own String` on the way back,
+`malloc`'d — never `palloc`, which `free()` would corrupt) and one C
+bridge prepares each query once per backend (`SPI_prepare` +
+`SPI_keepplan`, the same plan the `PREPARE` statement has) and runs it in
+a **subtransaction under `PG_TRY`**: an error is rolled back and handed to
+Keal as a message the wrapper `throw`s — a Keal exception, catchable by
+the stored function, or raised by the entry point once every Keal frame
+has returned. The rule below, held in both directions. The suite checks
+both: a caught query error stays inside, an uncaught one is a SQL error
+with the write rolled back, and the backend lives on.
 
-The issue the SPI step must settle: PostgreSQL reports errors with
+Cost to state: a subtransaction per query call — what PL/pgSQL pays for an
+exception block, paid here on every call. The alternative, an error that
+`longjmp`s through Keal, is the thing the rule forbids.
+
+Two things the runtime needed, found by doing it: the program's `main` is
+what sets the runtime up, so the entry points call `keal_runtime_init()`
+(added to Keal for this) from `_PG_init`; and a global must be right as C
+zeroes it (`var x: String? = null`), because that `main` never runs. And
+one backend bug worked around: the synthesised `toString` of a record
+with an `Int?` field does not compile natively, so the generated records
+write their own.
+
+The rule that shaped the design: PostgreSQL reports errors with
 `longjmp` (`ereport`) and allocates with `palloc`. Measured on the Keal side
 (keal `db49bf4`, `docs/interop.md`): the Keal runtime uses no `setjmp`, it
 unwinds by poisoned returns, so a foreign `longjmp` over Keal frames leaks
@@ -377,9 +409,10 @@ Mappings:
 
 * Spelling of the null-safe comparison operators (`===` / `!==` is a
   placeholder).
-* `plkeal` with SPI — database access from inside a stored function —
-  under the shim discipline of §1; and a runtime entry point for
-  initialisation that is not a `static` function called by name.
+* `plkeal`: cells cross as text and are parsed on the Keal side; a binary
+  path (`SPI_getbinval`) is the optimisation when a profile asks for it.
+  A `pure` function that runs a query is declared `IMMUTABLE` wrongly, and
+  KealSql cannot see inside the body to say so.
 * PostgreSQL trademark: "KealSql" is fine; "built on PostgreSQL" is the safe
   formula. PostgreSQL's licence (permissive, BSD-like) allows all of this;
   the copyright notice and permission paragraph must be kept.

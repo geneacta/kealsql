@@ -1,0 +1,87 @@
+// Stored functions that run the file's own queries, through SPI.
+
+enum Status { Draft, Published }
+
+table User {
+    id:    Id
+    name:  Slug
+    karma: Int
+}
+
+table Post {
+    id:      Id
+    cascade author: RefId<User>
+    title:   String
+    status:  Status
+    score:   Int?
+}
+
+func userNamed(who: String): User? {
+    from(User).where(name == who).select(*).first()
+}
+
+func posts(by: Int): List<(Int, String, Int?)> {
+    from(Post).where(author == by).orderBy(id).select(id, title, score)
+}
+
+func published(): Int {
+    from(Post).where(status == Published).count()
+}
+
+func hasDrafts(by: Int): Bool {
+    from(Post).where(author == by and status == Draft).exists()
+}
+
+func newPost(by: Int, heading: String): Post {
+    insert(Post(author = by, title = heading, status = Draft))
+}
+
+proc award(who: Int, points: Int) {
+    update(User).where(id == who).set(karma = points)
+}
+
+// The total score of an author's posts, a null counting for nothing.
+stored func totalScore(name: String): Int {
+    val u = userNamed(name)
+    if (u == null) { return 0 }
+    var sum = 0
+    for (p in posts(u.id)) {
+        sum += p.score ?: 0
+    }
+    return sum
+}
+
+// Rows are records: fields by name, optional where the column is.
+stored func describe(name: String): String {
+    val u = userNamed(name)
+    if (u == null) { throw "no user named " + name }
+    return "${u.name} has ${u.karma} karma and ${posts(u.id).size} posts" + (if (hasDrafts(u.id)) { ", some drafts" } else { "" })
+}
+
+// A query error is a Keal exception: caught here, it stays inside.
+stored func safeAward(name: String, points: Int): String {
+    val u = userNamed(name)
+    if (u == null) { return "nobody" }
+    try {
+        award(u.id, points)
+        return "awarded"
+    } catch (e) {
+        return "refused: " + e
+    }
+}
+
+// A mutation with a row back, and a count that reads its own write.
+stored func draftAndCount(name: String, title: String): Int {
+    val u = userNamed(name)
+    if (u == null) { throw "no user named " + name }
+    val p = newPost(u.id, title)
+    return p.id * 1000 + published()
+}
+
+// Uncaught, a query error is a SQL error — and the backend lives on.
+stored func awardBig(name: String): String {
+    val u = userNamed(name)
+    if (u == null) { throw "no user named " + name }
+    award(u.id, 9223372036854775807)
+    return "done"
+}

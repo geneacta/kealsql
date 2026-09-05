@@ -1,0 +1,29 @@
+total_score|total_score|total_score
+12|0|0
+(1 row)
+describe
+ada has 10 karma and 3 posts, some drafts
+(1 row)
+describe
+bob has 0 karma and 0 posts
+(1 row)
+safe_award|safe_award
+awarded|nobody
+(1 row)
+karma
+42
+(1 row)
+draft_and_count
+4002
+(1 row)
+id|author|title|status
+4|2|Four|Draft
+(1 row)
+psql:tests/plkeal/spi.exec.sql:12: ERROR:  no user named nobody
+psql:tests/plkeal/spi.exec.sql:13: ERROR:  award: value "9223372036854775807" is out of range for type integer
+karma
+42
+(1 row)
+after_error
+still alive
+(1 row)
