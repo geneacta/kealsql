@@ -87,8 +87,8 @@ func isSqlReserved(w: String): Bool {
     }
 }
 
-/// `fullName` → `full_name`, `Post` → `post`; quoted when SQL has taken the word.
-package func sqlName(name: String): String {
+/// `fullName` → `full_name`, `Post` → `post`: the name as the catalog holds it.
+package func snakeName(name: String): String {
     var out = ""
     var i = 0
     for (c in name) {
@@ -97,6 +97,18 @@ package func sqlName(name: String): String {
         out += lower
         i += 1
     }
+    return out
+}
+
+/// `snakeName`, quoted when SQL has taken the word.
+package func sqlName(name: String): String {
+    val out = snakeName(name)
     if (isSqlReserved(out)) { return "\"" + out + "\"" }
     return out
+}
+
+/// A catalog name back in SQL: quoted when it must be.
+package func quoteIf(raw: String): String {
+    if (isSqlReserved(raw)) { return "\"" + raw + "\"" }
+    return raw
 }

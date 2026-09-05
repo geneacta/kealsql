@@ -28,12 +28,14 @@ package class TypeN(package val name: String, package val line: Int, package val
 
 package class ColumnN(package val name: String, package val ty: TypeN, package val line: Int, package val col: Int) {
     package var mods: List<String> = []      // in source order
+    package var renamedFrom: String = ""     // `renamed(old) name: T`, consumed by the next migration
 
     package func has(mod: String): Bool { this.mods.contains(mod) }
 }
 
 package class TableN(package val name: String, package val line: Int, package val col: Int) {
     package var columns: List<ColumnN> = []
+    package var renamedFrom: String = ""     // `renamed(Old) table Name { ... }`
     package var uniques: List<List<String>> = []   // unique(a, b) constraints
 
     package func column(name: String): ColumnN? { this.columns.find({ it.name == name }) }

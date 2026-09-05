@@ -66,19 +66,32 @@ server; nothing runs but the planner PostgreSQL already has.
 
 ## Running it
 
-KealSql needs the Keal toolchain (1.2.0 or later) on the path, or beside the
-repository at `../keal`.
+KealSql needs the Keal toolchain on the path, or beside the repository at
+`../keal` — at least the commit that gave `runCommand` a standard input
+(`a9ad2cc`, after 1.2.0), which `--migrate` uses to talk to `psql`.
 
 ```sh
-keal src/main.keal file.kealsql        # print the SQL
-tests/run.sh                            # the suite: every case, byte for byte
+keal src/main.keal file.kealsql                          # print the SQL
+keal src/main.keal --migrate file.kealsql --db mydb      # the migration from a live database to the file
+keal src/main.keal --migrate file.kealsql --db mydb --destructive
+tests/run.sh                                              # the suite: every case, byte for byte
 ```
+
+`--migrate` reads the database through `psql` (`--db` is its `-d`; the
+`PG*` environment and `~/.pgpass` work as for `psql`) and prints the
+statements that bring it to the file, to review. Destructive ones — drops,
+narrowed types, a new `NOT NULL` — are held back as comments, each with
+what it would cost, until `--destructive`. A rename is written where it
+happens, `renamed(bio) about: String?` or `renamed(Post) table Article`,
+because a diff cannot tell a rename from a drop and an add.
 
 When PostgreSQL's `initdb` is on the machine, the suite also starts a
 private server in a temporary directory — no root, no configuration — loads
 every case's SQL into a fresh database, runs the `*.exec.sql` beside it in
-the same session, and compares the rows to `*.exec.out`. Without `initdb`
-it says so and compares the SQL only.
+the same session, and compares the rows to `*.exec.out`; each
+`tests/migrations/*/` is built from `before.kealsql`, migrated to
+`after.kealsql`, applied in one transaction, and diffed again until it
+settles. Without `initdb` it says so and compares the SQL only.
 
 The compiler runs on Keal's bytecode VM. `keal build` refuses it for now —
 its error path returns `Nothing`, which the C backend does not cover yet —
@@ -93,10 +106,13 @@ and says so by name rather than mis-compiling, which is Keal's rule.
 | `src/parser.keal` | items (`table`, `enum`, `func`, `proc`) and Keal's expression precedence |
 | `src/schema.keal` | the resolved schema and SQL naming |
 | `src/compile.keal` | checker and emitter, one pass: a `Val` is an expression's SQL and its type |
+| `src/catalog.keal` | the live schema, read from `pg_catalog` through `psql` |
+| `src/migrate.keal` | the diff: declared against live, as statements to review |
 | `src/main.keal` | the command |
 | `tests/cases/*.kealsql` | each compiles to exactly its `.sql` |
 | `tests/errors/*.kealsql` | each fails with exactly its `.err` |
 | `tests/cases/*.exec.sql` | run on PostgreSQL after the case's SQL; the rows must be exactly `.exec.out` |
+| `tests/migrations/*/` | `before.kealsql` → `after.kealsql` must print `expected.sql`, apply, then settle to `settled.sql` |
 
 ## Status
 
@@ -106,7 +122,8 @@ DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 `select` / `count` / `exists` with `first` / `single`, subqueries through
 `val`-bound fragments and `in`, `insert` / `update` / `delete`, `when`,
 `?:`, the eight connectives with Kleene's tables on `Bool3`, and reference
-paths as implicit joins. Not yet: the migration diff against a live
-database, and `plkeal`.
+paths as implicit joins — and the migration diff against a live database,
+with renames declared and destructive steps held back. Not yet: `plkeal`,
+and native compilation (`Nothing` in Keal's C backend).
 
 Licensed under Apache-2.0, like Keal.

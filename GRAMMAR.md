@@ -32,6 +32,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 |---|---|
 | `table` | before a name: `table User { … }` |
 | `primary` `slug` `unique` `cascade` `restrict` `setNull` | before a column name, inside a `table` |
+| `renamed` | `renamed(old)` before a column name, or before `table` |
 
 **Nothing else is reserved.** `from`, `where`, `select`, `join`, `orderBy`,
 `insert`, `update`, `delete`, `set`, `like` are methods and functions, not
@@ -54,8 +55,9 @@ resolved relative to the importing file, loaded once — Keal's rule.
 ## 3. Schema
 
 ```
-TableDecl     = "table" Ident "{" ( Column | TableConstraint )* "}" ;
-Column        = Modifier* Ident ":" Type ;
+TableDecl     = Renamed? "table" Ident "{" ( Column | TableConstraint )* "}" ;
+Column        = ( Modifier | Renamed )* Ident ":" Type ;
+Renamed       = "renamed" "(" Ident ")" ;                 (* the previous name, for the migration *)
 Modifier      = "primary" | "slug" | "unique" | "cascade" | "restrict" | "setNull" ;
 TableConstraint = "unique" "(" Ident ( "," Ident )+ ")" ;
 
@@ -92,6 +94,7 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `restrict` only on a `Ref…?` (to override its `setNull` default) | on a non-optional reference, where it is already the default |
 | at most one of `cascade` / `restrict` / `setNull` | two |
 | `unique(a, b)` names existing columns of the table, at least two | otherwise |
+| `renamed(old)` at most once per column or table | twice |
 
 ### What it compiles to
 
@@ -358,7 +361,22 @@ The whole file, with its expected output, is `tests/cases/blog.kealsql`.
 The `Bool3` warning of §5 is emitted as a `-- warning file:L:C ...` comment
 line above the statement it concerns, so the output stays loadable.
 
-## 7. Implementation notes
+## 7. The command
+
+```
+kealsql file.kealsql                                   the SQL: schema, then one PREPARE per func / proc
+kealsql --migrate file.kealsql [--db NAME] [--destructive]
+                                                       the migration from a live database to the file
+```
+
+`--migrate` reads the database through `psql` — `--db` is its `-d`; without
+it the `PG*` environment and `~/.pgpass` decide — and prints `ALTER`,
+`CREATE` and `DROP` statements to review. Destructive statements are held
+back as comments unless `--destructive`; `renamed(old)` is what makes a
+rename a rename rather than a drop and an add. [DESIGN.md](DESIGN.md) §3
+has the rules.
+
+## 8. Implementation notes
 
 * **Lexer:** `keal/selfhost/lexing.keal`, **vendored** as `src/lexing.keal`
   — its declarations are `package`, visible only beside it, so an import
@@ -381,6 +399,13 @@ line above the statement it concerns, so the output stays loadable.
   `Val`: its SQL and its type, plus the column it names when it names one,
   which is what a reference path continues from. A `Plan` gathers the
   clauses of one SELECT; rendering it is the last step.
+* **Migrations:** `src/catalog.keal` reads `pg_catalog` in one `psql` round
+  trip (`runCommand` with the script on standard input) into a `Live`
+  model; `src/migrate.keal` diffs it against the resolved schema and
+  renders `Step`s, each additive or destructive with its reason.
 * **Tests:** `tests/run.sh` — each `tests/cases/X.kealsql` must produce
   exactly `X.sql`, each `tests/errors/X.kealsql` exactly `X.err`, the way
-  Keal's suite compares engine output byte for byte.
+  Keal's suite compares engine output byte for byte. With PostgreSQL on the
+  machine, every case is loaded and executed, and every
+  `tests/migrations/X/` is migrated, applied in one transaction, and
+  diffed again until it settles.

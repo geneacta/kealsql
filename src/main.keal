@@ -1,21 +1,61 @@
-// kealsql — the KealSql compiler. `keal src/main.keal file.kealsql` prints the
-// SQL for the file: the schema as CREATE statements, then one PREPARE per
-// `func` or `proc`. Errors go to standard output as `error file:L:C ...`
-// and exit 1, the way Keal reports its own.
+// kealsql — the KealSql compiler.
+//
+//   keal src/main.keal file.kealsql                       the SQL: schema, then one PREPARE per func / proc
+//   keal src/main.keal --migrate file.kealsql [--db NAME] [--destructive]
+//                                                          the migration from a live database to the file
+//
+// `--migrate` reads the database through `psql`; `--db` is psql's `-d`, and
+// without it the PG* environment and ~/.pgpass decide, as for psql itself.
+// Destructive statements are held back as comments unless `--destructive`.
+// Errors go to standard output as `error file:L:C ...` and exit 1, the way
+// Keal reports its own.
 
 import "./parser.keal"
 import "./compile.keal"
+import "./migrate.keal"
 
-val argv = args()
-if (argv.size != 1) {
+func usage(): Nothing {
     println("usage: kealsql <file.kealsql>")
+    println("       kealsql --migrate <file.kealsql> [--db NAME] [--destructive]")
     exit(2)
 }
-val path = argv[0]
+
+var path = ""
+var migrate = false
+var destructive = false
+var db = ""
+val argv = args()
+var i = 0
+while (i < argv.size) {
+    val a = argv[i]
+    when (a) {
+        "--migrate" -> { migrate = true }
+        "--destructive" -> { destructive = true }
+        "--db" -> {
+            i += 1
+            if (i >= argv.size) { usage() }
+            db = argv[i]
+        }
+        else -> {
+            if (a.startsWith("--") or path != "") { usage() }
+            path = a
+        }
+    }
+    i += 1
+}
+if (path == "") { usage() }
+if (destructive and not migrate) { usage() }
+
 val source = readFile(path)
 if (source == null) {
     println("error: cannot read `${path}`")
     exit(1)
 }
 val program = parseFile(path, source)
-print(Compiler(path, program).compile())
+val compiler = Compiler(path, program)
+if (migrate) {
+    compiler.resolveSchema()
+    print(Migration(compiler, readLive(db), destructive).run())
+} else {
+    print(compiler.compile())
+}

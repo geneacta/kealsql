@@ -42,6 +42,7 @@ trap stop EXIT
 "$PGBIN/initdb" -D "$PGDIR/data" -A trust -U kealsql --no-locale -E UTF8 > "$PGDIR/initdb.log" 2>&1 || { echo "FAIL initdb"; cat "$PGDIR/initdb.log" | tail -5; exit 1; }
 "$PGBIN/pg_ctl" -D "$PGDIR/data" -o "-k $PGDIR -p $PORT -h ''" -l "$PGDIR/server.log" -w start > /dev/null 2>&1 || { echo "FAIL pg_ctl start"; tail -5 "$PGDIR/server.log"; exit 1; }
 PSQL="$PGBIN/psql -h $PGDIR -p $PORT -U kealsql -q -A -v ON_ERROR_STOP=1"
+export PGHOST="$PGDIR" PGPORT="$PORT" PGUSER=kealsql PATH="$PGBIN:$PATH"
 for f in tests/cases/*.sql; do
     case "$f" in *.exec.sql) continue;; esac
     name=$(basename "${f%.sql}")
@@ -61,6 +62,34 @@ for f in tests/cases/*.sql; do
         fi
     else
         echo "ok   $f on PostgreSQL"
+    fi
+done
+
+# ---- migrations: tests/migrations/NAME/{before,after}.kealsql
+# The database is built from before.kealsql; `--migrate after.kealsql` must
+# print exactly expected.sql (destructive statements held back), the
+# `--destructive` form must apply in one transaction, and a second
+# `--migrate` must then print exactly settled.sql — the notes, and nothing
+# to do.
+for d in tests/migrations/*/; do
+    name="mig_$(basename "$d")"
+    $PSQL -d postgres -c "CREATE DATABASE $name" > /dev/null
+    if ! "$KEAL" src/main.keal "$d/before.kealsql" | $PSQL -d "$name" > /dev/null 2>&1; then
+        echo "FAIL $d: before.kealsql does not load"; failed=1; continue
+    fi
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" 2>&1); code=$?
+    if [ "$code" != 0 ]; then echo "FAIL $d: --migrate exit $code"; echo "$out" | head -5; failed=1; continue; fi
+    if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/expected.sql"; fi
+    if ! printf '%s\n' "$out" | diff -u "$d/expected.sql" - > /dev/null 2>&1; then
+        echo "FAIL $d/expected.sql"; printf '%s\n' "$out" | diff -u "$d/expected.sql" - | head -20; failed=1; continue
+    fi
+    if ! "$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" --destructive | $PSQL -1 -d "$name" > "$PGDIR/apply.log" 2>&1; then
+        echo "FAIL $d: the migration does not apply"; head -5 "$PGDIR/apply.log"; failed=1; continue
+    fi
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" 2>&1)
+    if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/settled.sql"; fi
+    if printf '%s\n' "$out" | diff -u "$d/settled.sql" - > /dev/null 2>&1; then echo "ok   $d migrates, applies, and settles"
+    else echo "FAIL $d/settled.sql"; printf '%s\n' "$out" | diff -u "$d/settled.sql" - | head -20; failed=1
     fi
 done
 exit $failed

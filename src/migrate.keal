@@ -1,0 +1,289 @@
+// The migration: the declared schema against the live one, as SQL to
+// review. Additive statements are emitted as they are. Destructive ones —
+// anything that drops, narrows, or could fail on the rows already there —
+// are emitted as comments unless `--destructive` was given, and each says
+// what it would cost. Renames are never inferred: a column or table that
+// says `renamed(old)` is renamed, everything else is a drop and an add.
+
+import "./ast.keal"
+import "./schema.keal"
+import "./compile.keal"
+import "./catalog.keal"
+
+/// One statement of the migration, and whether it needs the flag.
+package class Step(package val sql: String, package val destructive: Bool, package val why: String)
+
+package class Migration(val compiler: Compiler, val live: Live, val destructive: Bool) {
+    var steps: List<Step> = []
+    var notes: List<String> = []
+
+    func schema(): Schema { this.compiler.schema }
+
+    proc add(sql: String) { this.steps.add(Step(sql, false, "")) }
+    proc drop(sql: String, why: String) { this.steps.add(Step(sql, true, why)) }
+    proc note(text: String) { this.notes.add(text) }
+
+    // ---- what the declaration expects the catalog to hold ---------------
+
+    /// A column's type as `format_type` renders it.
+    func pgType(c: Column): String {
+        return when (c.scalar) {
+            "Int" -> "integer"
+            "BigInt" -> "bigint"
+            "Float" -> "double precision"
+            "Bool" -> "boolean"
+            "String" -> if (c.len > 0) { "character varying(${c.len})" } else { "text" }
+            "Uuid" -> "uuid"
+            "Bytea" -> "bytea"
+            "Date" -> "date"
+            "Timestamp" -> "timestamp without time zone"
+            else -> snakeName(c.scalar)
+        }
+    }
+
+    func actionLetter(a: String): String {
+        return when (a) {
+            "CASCADE" -> "c"
+            "SET NULL" -> "n"
+            "RESTRICT" -> "r"
+            else -> "a"
+        }
+    }
+
+    func actionWord(l: String): String {
+        return when (l) {
+            "c" -> "CASCADE"
+            "n" -> "SET NULL"
+            "r" -> "RESTRICT"
+            else -> "NO ACTION"
+        }
+    }
+
+    /// The constraints a table should have, in the catalog's vocabulary.
+    func wanted(t: Table): List<LiveConstraint> {
+        val out: List<LiveConstraint> = []
+        val tn = snakeName(t.name)
+        for (c in t.columns) {
+            val cn = snakeName(c.name)
+            if (c.isPrimary) { out.add(LiveConstraint("p", "${tn}_pkey", [cn])) }
+            if (c.isSlug or c.isUnique) { out.add(LiveConstraint("u", "${tn}_${cn}_key", [cn])) }
+            if (c.refTable != "") {
+                val k = LiveConstraint("f", "${tn}_${cn}_fkey", [cn])
+                k.refTable = snakeName(c.refTable)
+                k.refCols = [snakeName(c.refColumn)]
+                k.onDelete = this.actionLetter(c.onDelete)
+                k.onUpdate = this.actionLetter(c.onUpdate)
+                out.add(k)
+            }
+        }
+        for (u in t.decl.uniques) {
+            val cols = u.map({ snakeName(it) })
+            out.add(LiveConstraint("u", "${tn}_${cols.join("_")}_key", cols))
+        }
+        return out
+    }
+
+    func sameConstraint(a: LiveConstraint, b: LiveConstraint): Bool {
+        if (a.kind != b.kind or a.cols.join(",") != b.cols.join(",")) { return false }
+        if (a.kind != "f") { return true }
+        return a.refTable == b.refTable and a.refCols.join(",") == b.refCols.join(",") and a.onDelete == b.onDelete and a.onUpdate == b.onUpdate
+    }
+
+    func constraintSql(tn: String, k: LiveConstraint): String {
+        val cols = k.cols.map({ quoteIf(it) }).join(", ")
+        val body = when (k.kind) {
+            "p" -> "PRIMARY KEY (${cols})"
+            "u" -> "UNIQUE (${cols})"
+            else -> "FOREIGN KEY (${cols}) REFERENCES ${quoteIf(k.refTable)}(${k.refCols.map({ quoteIf(it) }).join(", ")}) ON DELETE ${this.actionWord(k.onDelete)} ON UPDATE ${this.actionWord(k.onUpdate)}"
+        }
+        return "ALTER TABLE ${quoteIf(tn)} ADD CONSTRAINT ${k.name} ${body};"
+    }
+
+    // ---- the diff ---------------------------------------------------------
+
+    package func run(): String {
+        val schema = this.schema()
+        this.enums()
+        // Renames first, so that everything after sees the new names.
+        val liveNameOf: Map<String, String> = {}       // declared table -> live table it maps to, "" when new
+        for (name in schema.tableOrder) {
+            val t = schema.tables[name]!!
+            val tn = snakeName(t.name)
+            val old = snakeName(t.decl.renamedFrom)
+            if (t.decl.renamedFrom != "" and this.live.tables.containsKey(old) and not this.live.tables.containsKey(tn)) {
+                this.add("ALTER TABLE ${quoteIf(old)} RENAME TO ${quoteIf(tn)};")
+                liveNameOf.set(name, old)
+            } else {
+                if (t.decl.renamedFrom != "" and this.live.tables.containsKey(tn)) {
+                    this.note("`${t.name}` is already named so; the `renamed(${t.decl.renamedFrom})` can go")
+                }
+                liveNameOf.set(name, if (this.live.tables.containsKey(tn)) { tn } else { "" })
+            }
+        }
+        // New tables, in an order that creates a reference's target first.
+        for (name in this.compiler.tableOrder()) {
+            if (liveNameOf[name] == "") { this.createTable(schema.tables[name]!!) }
+        }
+        // Existing tables: columns, then constraints.
+        for (name in schema.tableOrder) {
+            val ln = liveNameOf[name]!!
+            if (ln != "") { this.alterTable(schema.tables[name]!!, this.live.tables[ln]!!) }
+        }
+        // Tables the declaration no longer has.
+        val kept = liveNameOf.values()
+        for (ln in this.live.tableOrder) {
+            unless (kept.contains(ln)) {
+                this.drop("DROP TABLE ${quoteIf(ln)};", "every row of `${ln}` is lost")
+            }
+        }
+        this.dropEnums()
+        return this.render()
+    }
+
+    proc enums() {
+        val schema = this.schema()
+        for (e in this.compiler.program.enums) {
+            val en = snakeName(e.name)
+            val labels = this.live.enums[en]
+            if (labels == null) {
+                this.add("CREATE TYPE ${quoteIf(en)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});")
+                continue
+            }
+            for (v in e.values) {
+                unless (labels.contains(v)) { this.add("ALTER TYPE ${quoteIf(en)} ADD VALUE '${v}';") }
+            }
+            for (l in labels) {
+                unless (e.values.contains(l)) {
+                    this.note("`${e.name}` no longer has `${l}`, but PostgreSQL cannot remove a value from an enum; recreate the type to drop it")
+                }
+            }
+        }
+    }
+
+    proc dropEnums() {
+        val declared = this.compiler.program.enums.map({ snakeName(it.name) })
+        for (en in this.live.enumOrder) {
+            unless (declared.contains(en)) { this.drop("DROP TYPE ${quoteIf(en)};", "the type `${en}` is removed") }
+        }
+    }
+
+    proc createTable(t: Table) {
+        var sql = "CREATE TABLE ${sqlName(t.name)} (\n"
+        val lines: List<String> = []
+        for (c in t.columns) { lines.add("    " + this.compiler.columnDdl(c)) }
+        for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
+        this.add(sql + lines.join(",\n") + "\n);")
+    }
+
+    proc alterTable(t: Table, lt: LiveTable) {
+        // Statements name the table as it is now called — after its rename, if any.
+        val tn = sqlName(t.name)
+        val seen: List<String> = []                    // live columns accounted for
+        for (c in t.columns) {
+            val cn = snakeName(c.name)
+            var lc = lt.column(cn)
+            if (lc == null and c.decl.renamedFrom != "") {
+                val old = snakeName(c.decl.renamedFrom)
+                val olc = lt.column(old)
+                if (olc != null) {
+                    this.add("ALTER TABLE ${tn} RENAME COLUMN ${quoteIf(old)} TO ${quoteIf(cn)};")
+                    seen.add(old)
+                    lc = olc
+                }
+            } else if (lc != null and c.decl.renamedFrom != "") {
+                this.note("`${t.name}.${c.name}` is already named so; the `renamed(${c.decl.renamedFrom})` can go")
+            }
+            val found = lc
+            if (found == null) {
+                val ddl = this.compiler.columnDdl(c)
+                if (c.optional or c.isSerial) {
+                    this.add("ALTER TABLE ${tn} ADD COLUMN ${ddl};")
+                } else {
+                    this.drop("ALTER TABLE ${tn} ADD COLUMN ${ddl};", "a NOT NULL column without a default fails if `${lt.name}` has rows; add it optional and backfill, or give it a default")
+                }
+                continue
+            }
+            seen.add(found.name)
+            this.alterColumn(tn, lt, c, found)
+        }
+        for (lc in lt.columns) {
+            unless (seen.contains(lc.name)) {
+                this.drop("ALTER TABLE ${tn} DROP COLUMN ${quoteIf(lc.name)};", "every value of `${lt.name}.${lc.name}` is lost")
+            }
+        }
+        // Constraints: by shape, never by name. Drop what no longer matches
+        // before adding, so a changed rule is a drop and an add.
+        val want = this.wanted(t)
+        for (k in lt.constraints) {
+            unless (want.any({ this.sameConstraint(it, k) })) {
+                this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};")
+            }
+        }
+        for (k in want) {
+            unless (lt.constraints.any({ this.sameConstraint(it, k) })) {
+                if (k.kind == "p" and lt.constraints.any({ it.kind == "p" })) {
+                    // The old key was dropped just above; the new one follows.
+                }
+                this.add(this.constraintSql(snakeName(t.name), k))
+            }
+        }
+    }
+
+    proc alterColumn(tn: String, lt: LiveTable, c: Column, lc: LiveColumn) {
+        val cn = quoteIf(lc.name)
+        val want = this.pgType(c)
+        if (want != lc.ty) {
+            val typed = "ALTER TABLE ${tn} ALTER COLUMN ${cn} TYPE ${sqlType(c.scalar, c.len, this.schema())};"
+            if (this.widens(lc.ty, want)) { this.add(typed) }
+            else { this.drop(typed, "`${lt.name}.${lc.name}` goes from ${lc.ty} to ${want}; values that do not fit are lost or refused") }
+        }
+        val wantNotNull = not c.optional
+        if (wantNotNull and not lc.notNull) {
+            this.drop("ALTER TABLE ${tn} ALTER COLUMN ${cn} SET NOT NULL;", "fails if `${lt.name}.${lc.name}` holds a null; backfill first")
+        }
+        if (not wantNotNull and lc.notNull and not c.isPrimary) {
+            this.add("ALTER TABLE ${tn} ALTER COLUMN ${cn} DROP NOT NULL;")
+        }
+        val wantSerial = c.isSerial
+        val isSerial = lc.default.startsWith("nextval(")
+        if (wantSerial and not isSerial) {
+            this.note("`${lt.name}.${lc.name}` is declared `Serial` but has no sequence; that is not migrated (v1)")
+        }
+    }
+
+    /// A type change that every existing value survives.
+    func widens(from: String, to: String): Bool {
+        if (from == "integer" and to == "bigint") { return true }
+        if (from.startsWith("character varying(") and to == "text") { return true }
+        if (from.startsWith("character varying(") and to.startsWith("character varying(")) {
+            val a = from.drop(18).take(from.length - 19).toInt() ?: 0
+            val b = to.drop(18).take(to.length - 19).toInt() ?: 0
+            return b >= a
+        }
+        return false
+    }
+
+    // ---- output ----------------------------------------------------------
+
+    func render(): String {
+        var out = ""
+        for (n in this.notes) { out += "-- note: ${n}\n" }
+        if (this.steps.isEmpty()) {
+            out += "-- nothing to do: the database matches the declaration\n"
+            return out
+        }
+        var held = 0
+        for (s in this.steps) {
+            if (s.destructive and not this.destructive) {
+                held += 1
+                out += "-- DESTRUCTIVE, held back (pass --destructive to emit it): ${s.why}\n"
+                for (l in lines(s.sql)) { out += "-- ${l}\n" }
+            } else {
+                if (s.destructive) { out += "-- destructive: ${s.why}\n" }
+                out += s.sql + "\n"
+            }
+        }
+        if (held > 0) { out += "-- ${held} statement${if (held == 1) { "" } else { "s" }} held back\n" }
+        return out
+    }
+}

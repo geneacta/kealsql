@@ -108,6 +108,12 @@ package class Parser(val toks: List<Token>, val file: String) {
                 p.imports.add(this.advance().text)
             } else if (this.atWord("table") and this.peekAt(1).kind == "ident") {
                 p.tables.add(this.tableDecl())
+            } else if (this.atWord("renamed") and this.peekAt(1).kind == "(") {
+                val old = this.renamed()
+                unless (this.atWord("table")) { this.failHere("`renamed(...)` at the top level goes before `table`") }
+                val t = this.tableDecl()
+                t.renamedFrom = old
+                p.tables.add(t)
             } else if (this.atWord("enum") and this.peekAt(1).kind == "ident") {
                 p.enums.add(this.enumDecl())
             } else if (this.at("func")) {
@@ -169,16 +175,34 @@ package class Parser(val toks: List<Token>, val file: String) {
         return names
     }
 
+    /// `renamed(old)`: the previous name, for the migration that renames it.
+    func renamed(): String {
+        this.advance()                                         // `renamed`
+        this.expect("(", "after `renamed`")
+        val old = this.expectIdent("the previous name")
+        this.expect(")", "to close `renamed(`")
+        return old
+    }
+
     func column(): ColumnN {
         val mods: List<String> = []
-        while (this.at("ident") and isModifier(this.peek().text) and this.peekAt(1).kind == "ident") {
-            mods.add(this.advance().text)
+        var renamedFrom = ""
+        while (this.at("ident")) {
+            if (isModifier(this.peek().text) and this.peekAt(1).kind == "ident") {
+                mods.add(this.advance().text)
+            } else if (this.peek().text == "renamed" and this.peekAt(1).kind == "(") {
+                if (renamedFrom != "") { this.failHere("`renamed` is written twice") }
+                renamedFrom = this.renamed()
+            } else {
+                break
+            }
         }
         val t = this.peek()
         val name = this.expectIdent("a column name")
         this.expect(":", "after the column's name")
         val c = ColumnN(name, this.typeExpr(), t.line, t.col)
         c.mods = mods
+        c.renamedFrom = renamedFrom
         return c
     }
 

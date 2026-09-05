@@ -285,21 +285,32 @@ and the database and generates the migration (the EdgeDB / Atlas / Prisma
 model). Without this, KealSql rewrites `CREATE TABLE` with different
 parentheses.
 
-**The diff is in v1.** Scope:
+**The diff is in v1** — `kealsql --migrate file.kealsql [--db NAME]`:
 
-* The compiler reads the live schema from `pg_catalog`, compares it with the
-  `.kealsql` declarations, and emits the migration as SQL — `CREATE`,
-  `ALTER`, `DROP` — as a file to review, never applied silently.
-* Additive changes (new table, new nullable column, new index, widened type)
-  are generated without ceremony. Destructive ones (drop table, drop column,
-  narrowed type, a new `NOT NULL` on a populated column) are generated but
-  require an explicit flag to apply; the compiler names what would be lost.
-* **Renames cannot be inferred from a diff** — a dropped `name` and a new
-  `fullName` look identical to a drop plus an add. The declaration says so:
-  `fullName: String renamed(name)`; the annotation is consumed by the next
-  migration and then removed. *(Spelling to be settled.)*
-* Out of scope for v1: data migrations (backfills), and diffing against
-  anything but PostgreSQL.
+* The compiler reads the live schema from `pg_catalog` through `psql` (one
+  round trip; `PG*` and `~/.pgpass` decide the connection, as for `psql`),
+  compares it with the declarations, and prints the migration as SQL to
+  review — never applied by the compiler itself. Constraints are matched by
+  **shape** (kind, columns, target, actions), never by name, so a database
+  built by hand and one built by KealSql diff the same.
+* Additive statements are printed as they are: new enum, new value, new
+  table, new optional column, widened type (`integer → bigint`,
+  `varchar(n) → varchar(m ≥ n)` or `text`), `DROP NOT NULL`, a changed
+  reference rule (a drop and an add). **Destructive** ones — `DROP TABLE`,
+  `DROP COLUMN`, `DROP TYPE`, a narrowed type, `SET NOT NULL`, a new
+  `NOT NULL` column without a default — are **held back as comments**, each
+  with what it would cost, until `--destructive` is passed. A value removed
+  from an enum is only a note: PostgreSQL cannot drop one.
+* **Renames are never inferred** — a dropped `bio` and a new `about` look
+  identical to a drop plus an add. The declaration says so, as a prefix in
+  the position every modifier has: `renamed(bio) about: String?`, and
+  `renamed(Post) table Article { … }`. The migration renames; once the
+  database is renamed the annotation is a note ("can go") and nothing else,
+  so leaving it in for a while costs nothing.
+* The suite applies each test migration in one transaction and runs the
+  diff again: it must then print nothing but the notes.
+* Out of scope for v1: data migrations (backfills), sequences on a column
+  that becomes `Serial`, and anything but PostgreSQL.
 
 ## 4. Queries
 
@@ -333,8 +344,6 @@ Mappings:
 
 * Spelling of the null-safe comparison operators (`===` / `!==` is a
   placeholder).
-* Spelling of the rename annotation for migrations (`renamed(name)` is a
-  placeholder) — and its position, given that modifiers go before the name.
 * `plkeal`: the C shim discipline of §1, and whether `keal build` can
   produce a `LANGUAGE C` function's entry point directly.
 * PostgreSQL trademark: "KealSql" is fine; "built on PostgreSQL" is the safe

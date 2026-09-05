@@ -1,0 +1,118 @@
+// What a live PostgreSQL database holds, read through `psql` from
+// pg_catalog. One round trip: a script of four SELECTs, each row tagged
+// with the kind of thing it describes, parsed back into the model below.
+// Names are the catalog's own: lower case, unquoted.
+
+package class LiveColumn(package val name: String, package val ty: String, package val notNull: Bool, package val default: String)
+
+/// kind: "p" primary key, "u" unique, "f" foreign key. Actions are the
+/// catalog's letters: a no action, r restrict, c cascade, n set null.
+package class LiveConstraint(package val kind: String, package val name: String, package val cols: List<String>) {
+    package var refTable: String = ""
+    package var refCols: List<String> = []
+    package var onDelete: String = "a"
+    package var onUpdate: String = "a"
+}
+
+package class LiveTable(package val name: String) {
+    package var columns: List<LiveColumn> = []
+    package var constraints: List<LiveConstraint> = []
+
+    package func column(name: String): LiveColumn? { this.columns.find({ it.name == name }) }
+}
+
+package class Live() {
+    package var enums: Map<String, List<String>> = {}
+    package var enumOrder: List<String> = []
+    package var tables: Map<String, LiveTable> = {}
+    package var tableOrder: List<String> = []
+}
+
+val catalogScript = """
+SELECT 'E', t.typname, e.enumlabel
+FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid
+WHERE t.typnamespace = 'public'::regnamespace
+ORDER BY t.typname, e.enumsortorder;
+SELECT 'T', c.relname
+FROM pg_class c
+WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
+ORDER BY c.relname;
+SELECT 'C', c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+       coalesce((SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum), '')
+FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY c.relname, a.attnum;
+SELECT 'K', c.relname, k.contype, k.conname,
+       (SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.conkey) WITH ORDINALITY x(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = x.attnum),
+       coalesce(r.relname, ''),
+       coalesce((SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.confkey) WITH ORDINALITY x(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = x.attnum), ''),
+       k.confdeltype, k.confupdtype
+FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
+WHERE k.contype IN ('p', 'u', 'f') AND c.relnamespace = 'public'::regnamespace
+ORDER BY c.relname, k.conname;
+"""
+
+/// The `psql` invocation. `db` is `-d`'s argument, or "" to let the
+/// PG* environment and ~/.pgpass decide, as psql itself does.
+func psqlArgv(db: String): List<String> {
+    val argv = ["psql", "-X", "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1"]
+    if (db != "") { argv.add("-d"); argv.add(db) }
+    return argv
+}
+
+/// Reads the database, or explains why it could not and stops.
+package func readLive(db: String): Live {
+    val r = runCommand(psqlArgv(db), catalogScript)
+    if (r == null) {
+        println("error: `psql` could not be started; is PostgreSQL's client on the path?")
+        exit(1)
+    }
+    if (r[0] != "0") {
+        println("error: psql failed reading the catalog" + (if (db != "") { " of `${db}`" } else { "" }))
+        for (l in lines(r[2])) { if (l != "") { println("  ${l}") } }
+        exit(1)
+    }
+    return parseLive(r[1])
+}
+
+package func parseLive(text: String): Live {
+    val live = Live()
+    for (line in lines(text)) {
+        if (line == "") { continue }
+        val f = line.split("|")
+        when (f[0]) {
+            "E" -> {
+                val labels = live.enums[f[1]]
+                if (labels == null) {
+                    live.enums.set(f[1], [f[2]])
+                    live.enumOrder.add(f[1])
+                } else {
+                    labels.add(f[2])
+                }
+            }
+            "T" -> {
+                live.tables.set(f[1], LiveTable(f[1]))
+                live.tableOrder.add(f[1])
+            }
+            "C" -> {
+                val t = live.tables[f[1]]
+                if (t != null) { t.columns.add(LiveColumn(f[2], f[3], f[4] == "t", f[5])) }
+            }
+            "K" -> {
+                val t = live.tables[f[1]]
+                if (t != null) {
+                    val k = LiveConstraint(f[2], f[3], f[4].split(","))
+                    k.refTable = f[5]
+                    k.refCols = if (f[6] == "") { [] } else { f[6].split(",") }
+                    k.onDelete = f[7]
+                    k.onUpdate = f[8]
+                    t.constraints.add(k)
+                }
+            }
+            else -> {}
+        }
+    }
+    return live
+}

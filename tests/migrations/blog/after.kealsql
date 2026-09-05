@@ -1,0 +1,27 @@
+enum Status { Draft, Published, Archived }
+
+table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    renamed(bio) about: String?
+    nick:    String(20)?
+    joined:  Date?
+    karma:   Int
+}
+
+renamed(Post) table Article {
+    id:       Id
+    author:   RefId<User>
+    editor:   RefId<User>?
+    title:    String
+    status:   Status
+    created:  Timestamp?
+    tags:     String?
+}
+
+table Comment {
+    id:      Id
+    cascade article: RefId<Article>
+    body:    String
+}

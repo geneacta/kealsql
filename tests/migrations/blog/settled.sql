@@ -1,0 +1,3 @@
+-- note: `Article` is already named so; the `renamed(Post)` can go
+-- note: `User.about` is already named so; the `renamed(bio)` can go
+-- nothing to do: the database matches the declaration

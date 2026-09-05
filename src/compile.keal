@@ -45,8 +45,8 @@ package class Plan() {
     package var rowTable: String = ""        // select(*): the table
 }
 
-package class Compiler(val file: String, val program: ProgramN) {
-    var schema: Schema = Schema()
+package class Compiler(val file: String, package val program: ProgramN) {
+    package var schema: Schema = Schema()
     var params: List<Param> = []
     var bindings: Map<String, Ex> = {}
     var current: String = ""                 // the func being compiled, for messages
@@ -59,7 +59,7 @@ package class Compiler(val file: String, val program: ProgramN) {
 
     // ---- schema -------------------------------------------------------
 
-    proc resolveSchema() {
+    package proc resolveSchema() {
         for (e in this.program.enums) {
             if (this.schema.enums.containsKey(e.name)) { this.fail(e.line, e.col, "enum `${e.name}` is declared twice") }
             if (e.values.isEmpty()) { this.fail(e.line, e.col, "enum `${e.name}` has no values") }
@@ -91,7 +91,8 @@ package class Compiler(val file: String, val program: ProgramN) {
                     table.hasId = true
                 }
                 "Slug" -> { col.scalar = "String"; col.isSlug = true; table.hasSlug = true }
-                "Serial", "BigSerial" -> { col.scalar = "Int"; col.isSerial = true }
+                "Serial" -> { col.scalar = "Int"; col.isSerial = true }
+                "BigSerial" -> { col.scalar = "BigInt"; col.isSerial = true }
                 "Int", "BigInt", "Float", "Bool", "String", "Uuid", "Bytea", "Date", "Timestamp" -> { col.scalar = c.ty.name }
                 "RefId" -> { col.scalar = "Int"; col.refTable = c.ty.refTable }
                 "RefSlug" -> { col.scalar = "String"; col.refTable = c.ty.refTable }
@@ -188,7 +189,7 @@ package class Compiler(val file: String, val program: ProgramN) {
     // ---- DDL ----------------------------------------------------------
 
     /// Tables in an order that declares every reference's target first.
-    func tableOrder(): List<String> {
+    package func tableOrder(): List<String> {
         val done: List<String> = []
         val visiting: List<String> = []
         for (name in this.schema.tableOrder) { this.visitTable(name, done, visiting) }
@@ -225,9 +226,9 @@ package class Compiler(val file: String, val program: ProgramN) {
         return out
     }
 
-    func columnDdl(c: Column): String {
+    package func columnDdl(c: Column): String {
         var s = sqlName(c.name) + " "
-        s += if (c.isSerial) { "serial" } else { sqlType(c.scalar, c.len, this.schema) }
+        s += if (c.isSerial) { if (c.scalar == "BigInt") { "bigserial" } else { "serial" } } else { sqlType(c.scalar, c.len, this.schema) }
         if (c.isPrimary) { s += " PRIMARY KEY" }
         else {
             if (c.isSlug or c.isUnique) { s += " UNIQUE" }
@@ -269,7 +270,7 @@ package class Compiler(val file: String, val program: ProgramN) {
 
     func sqlTypeOf(ty: Ty): String { sqlType(ty.name, 0, this.schema) }
 
-    func isNumeric(ty: Ty): Bool { ty.name == "Int" or ty.name == "Float" }
+    func isNumeric(ty: Ty): Bool { ty.name == "Int" or ty.name == "BigInt" or ty.name == "Float" }
 
     func sameType(a: Ty, b: Ty): Bool { a.name == b.name or (this.isNumeric(a) and this.isNumeric(b)) }
 
