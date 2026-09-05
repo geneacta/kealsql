@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/kealsql.png" alt="KealSql" width="360"></p>
+<p align="center"><img src="kealsql.png" alt="KealSql" width="360"></p>
 
 # KealSql
 
