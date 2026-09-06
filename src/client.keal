@@ -181,7 +181,7 @@ static void kc_set_error(const char* m) {
     free(kc_err);
     kc_err = strdup(m ? m : "error");
     size_t n = strlen(kc_err);
-    while (n > 0 && (kc_err[n - 1] == '\\n' || kc_err[n - 1] == ' ')) { kc_err[--n] = 0; }
+    while (n > 0 && (kc_err[n - 1] == '\n' || kc_err[n - 1] == ' ')) { kc_err[--n] = 0; }
 }
 
 static void kc_reset_args(void) {

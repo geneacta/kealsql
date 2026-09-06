@@ -331,7 +331,7 @@ SHELL = {
     "compile": "keal src/main.keal blog.kealsql > blog.sql",
     "createdb": "createdb blog\npsql -d blog -f blog.sql",
     "psql": "psql -d blog -f blog.sql\n\nblog=> EXECUTE by_author('ada');\nblog=> EXECUTE editor_of(2);",
-    "client_build": "keal src/main.keal --client app/ blog.kealsql\ncp app.keal app/\nkeal build app/app.keal -I$(pg_config --includedir) -lpq -o app\nPGDATABASE=blog ./app",
+    "client_build": "keal build src/main.keal -o kealsql        # once: the compiler the import runs\nexport KEALSQL=$PWD/kealsql\nkeal build app.keal -I$(pg_config --includedir) -lpq -o app\nPGDATABASE=blog ./app",
     "migrate": "keal src/main.keal --migrate blog.kealsql --db blog > migration.sql\ncat migration.sql\npsql -1 -d blog -f migration.sql\nkeal src/main.keal --migrate blog.kealsql --db blog\n# -- nothing to do: the database matches the declaration",
     "stored": "keal src/main.keal --plkeal build/ blog.kealsql\nsh build/build.sh\nkeal src/main.keal --lib $PWD/build/blog.so blog.kealsql | psql -d blog",
 }

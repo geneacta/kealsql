@@ -154,12 +154,21 @@ name
 <p class="lede"><code>editor_of(2)</code> answers one row holding null: the post exists, its editor does not — the left join the <code>?.</code> asked for. Names are the file's, in <code>snake_case</code>.</p>
 </section>
 <section class="band" id="use-it-from-a-program"><h2>6. Use it from a program</h2>
-<p class="lede"><code>--client</code> writes a Keal module in which every query is a method on a connection, with the same types — rows are records, <code>first()</code> answers a <code>T?</code>, a failing query is an exception with the query's name:</p>
-<div class="cwin"><div class="cwin-bar"><span class="f">app.keal</span><span class="run">▶ PGDATABASE=blog ./app</span></div><pre>// An application over tests/cases/blog.kealsql, through the generated client.
-// The suite builds it with libpq, runs it against a fresh database holding
-// blog.sql, and holds its output to blog_app.out.
+<p class="lede">A Keal program imports the <code>.kealsql</code> itself. Keal's loader has <code>kealsql</code> write a module beside it — <code>.kealsql/blog.client.keal</code>, regenerated whenever the file is newer — in which every query is a method on a connection, with the same types: rows are records, <code>first()</code> answers a <code>T?</code>, a failing query is an exception with the query's name. Rename a column in the file and the program stops compiling:</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">app.keal</span><span class="run">▶ PGDATABASE=blog ./app</span></div><pre>// An application over tests/cases/blog.kealsql. The import is the .kealsql
+// itself: Keal&#x27;s loader has the compiler write .kealsql/blog.client.keal and
+// reads that. The suite builds it with libpq, runs it against a fresh
+// database holding blog.sql, and holds its output to blog_app.out.
 
-import &quot;./blog.client.keal&quot;
+import &quot;./blog.kealsql&quot;
+
+// A database made from the code: missing, then empty, then there.
+val made = createBlog(&quot;&quot;, &quot;client_blog_made&quot;)
+println(&quot;made: ${made.drafts()} draft(s) in a new database&quot;)
+made.close()
+val again = createBlog(&quot;&quot;, &quot;client_blog_made&quot;)            // already there: nothing to do
+println(&quot;again: ${again.drafts()} draft(s)&quot;)
+again.close()
 
 val db = connectBlog(&quot;&quot;)                                  // PG* in the environment says where
 
@@ -188,7 +197,9 @@ try {
 }
 db.forget(2)
 println(&quot;posts left: ${db.drafts() + db.byAuthor(&quot;ada&quot;).size}&quot;)
-db.close()</pre><div class="cwin-out"><pre>ada before: 1 post(s)
+db.close()</pre><div class="cwin-out"><pre>made: 0 draft(s) in a new database
+again: 0 draft(s)
+ada before: 1 post(s)
   #1 Hello
 drafts: 1
 published: Draft one (Published)
@@ -200,11 +211,11 @@ editor of #1: bob
 editor of #2: none
 drafts after rollback: 1
 caught: publish: expected one row, got 0
-posts left: 2</pre></div></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal src/main.keal --client app/ blog.kealsql
-cp app.keal app/
-keal build app/app.keal -I$(pg_config --includedir) -lpq -o app
+posts left: 2</pre></div></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal build src/main.keal -o kealsql        # once: the compiler the import runs
+export KEALSQL=$PWD/kealsql
+keal build app.keal -I$(pg_config --includedir) -lpq -o app
 PGDATABASE=blog ./app</pre></div>
-<p class="lede">The connection string is libpq's; an empty one leaves everything to the <code>PG*</code> environment and <code>~/.pgpass</code>. Build the program against <code>libpq</code>:</p>
+<p class="lede"><code>createBlog(conninfo, dbname)</code> makes the database when it is missing and its schema when it holds none of the tables; <code>connectBlog(conninfo)</code> opens one that exists. The connection string is libpq's; an empty one leaves everything to the <code>PG*</code> environment and <code>~/.pgpass</code>. Build the program against <code>libpq</code>, with <code>kealsql</code> on the path (or named by <code>KEALSQL</code>):</p>
 </section>
 <section class="band" id="evolve-it"><h2>7. Evolve it</h2>
 <p class="lede">Change the file — say, a <code>bio: String?</code> on <code>User</code>, and <code>Post</code> renamed to <code>Article</code> — and ask for the difference with the live database:</p>

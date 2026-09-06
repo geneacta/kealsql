@@ -1,8 +1,9 @@
-// An application over tests/cases/blog.kealsql, through the generated client.
-// The suite builds it with libpq, runs it against a fresh database holding
-// blog.sql, and holds its output to blog_app.out.
+// An application over tests/cases/blog.kealsql. The import is the .kealsql
+// itself: Keal's loader has the compiler write .kealsql/blog.client.keal and
+// reads that. The suite builds it with libpq, runs it against a fresh
+// database holding blog.sql, and holds its output to blog_app.out.
 
-import "./blog.client.keal"
+import "./blog.kealsql"
 
 // A database made from the code: missing, then empty, then there.
 val made = createBlog("", "client_blog_made")

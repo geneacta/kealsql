@@ -80,7 +80,7 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least `9a0b5ad` (after 1.2.0): `runCommand` with a standard
+`../keal` — at least `58f059a` (after 1.2.0): `runCommand` with a standard
 input, `Nothing` in the C backend, the public lexer, and the entry points
 and string ABI a host library uses (`keal_runtime_init`,
 `keal_program_run`, `keal_abi_str_*`).
@@ -95,12 +95,13 @@ keal src/main.keal --client app/ file.kealsql            # the queries as a Keal
 tests/run.sh                                              # the suite: every case, byte for byte
 ```
 
-From a program, the same queries are methods on a connection — `--client`
-writes the module, `keal build app.keal -I$(pg_config --includedir) -lpq`
-builds against it:
+From a program, the same queries are methods on a connection. A Keal
+program imports the `.kealsql` itself — Keal's loader (`58f059a` or later)
+has `kealsql` write `.kealsql/blog.client.keal` beside it and reads that,
+regenerating when the file changes — and links with libpq:
 
 ```
-import "./blog.client.keal"
+import "./blog.kealsql"
 
 val db = createBlog("", "blog")          // the database and its schema, made if missing
 for (p in db.byAuthor("ada")) { println("#${p.id} ${p.title}") }
@@ -108,7 +109,11 @@ val editor = db.editorOf(1)              // String?
 db.close()
 ```
 
-`connectBlog(conninfo)` opens an existing one.
+`connectBlog(conninfo)` opens an existing one. `keal build app.keal
+-I$(pg_config --includedir) -lpq` builds it; `kealsql` is `keal build
+src/main.keal -o kealsql` put on the path, or named by `KEALSQL`. Without
+the loader, `kealsql --client DIR blog.kealsql` writes the same module to
+import by its own path.
 
 `--migrate` reads the database through `psql` (`--db` is its `-d`; the
 `PG*` environment and `~/.pgpass` work as for `psql`) and prints the

@@ -507,7 +507,14 @@ kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCT
 kealsql --client DIR file.kealsql                      the queries as DIR/<stem>.client.keal, a module over libpq
 ```
 
-`--client` writes a Keal module an application imports: `connect<Stem>(conninfo)`
+`--client` writes the Keal module a program gets by writing
+`import "./blog.kealsql"` — Keal's loader runs `kealsql --client
+.kealsql/ blog.kealsql` when the module is missing or older than the
+file, and imports `.kealsql/blog.client.keal`; the directory is committed,
+so a checkout builds without `kealsql`. The command's contract, promised:
+`kealsql --client DIR file.kealsql` writes `DIR/<stem>.client.keal`,
+prints its path, exits 0; an error is `error file:L:C …` on standard
+output, exit 1. `connect<Stem>(conninfo)`
 opens a libpq connection (`""` leaves it to the `PG*` environment), and the
 `<Stem>Db` it answers has one method per `func` / `proc` of the file, with
 the same Keal types a stored function gets through SPI — rows as records,

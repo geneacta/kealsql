@@ -40,8 +40,8 @@
     <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
   </div>
 </nav>
-<div class="dgrid"><div class="dside"><a href="docs.html">Docs</a><a href="design.html">Design</a><a href="grammar.html">Grammar</a><a href="readme.html" class="on">README</a></div><div class="dmain prose"><p>&lt;p align="center"&gt;&lt;img src="kealsql.png" alt="KealSql" width="360"&gt;&lt;/p&gt;</p>
-<p>&lt;!-- kealsql-band:start --&gt; &lt;p align="center"&gt;   &lt;a href="https://github.com/geneacta/kealsql/releases"&gt;&lt;img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square&amp;labelColor=2b2b2b"&gt;&lt;/a&gt;   &lt;a href="https://github.com/geneacta/kealsql/tree/main/src"&gt;&lt;img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-77%25-blue?style=flat-square&amp;labelColor=2b2b2b"&gt;&lt;/a&gt; &lt;/p&gt; &lt;!-- kealsql-band:end --&gt;</p>
+<div class="dgrid"><div class="dside"><a href="docs.html">Docs</a><a href="design.html">Design</a><a href="grammar.html">Grammar</a><a href="readme.html" class="on">README</a></div><div class="dmain prose"><p>&lt;!-- kealsql-band:start --&gt; &lt;p align="right"&gt;   &lt;a href="https://github.com/geneacta/kealsql/releases"&gt;&lt;img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square&amp;labelColor=2b2b2b"&gt;&lt;/a&gt;   &lt;a href="https://github.com/geneacta/kealsql/tree/main/src"&gt;&lt;img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-77%25-blue?style=flat-square&amp;labelColor=2b2b2b"&gt;&lt;/a&gt; &lt;/p&gt; &lt;!-- kealsql-band:end --&gt;</p>
+<p>&lt;p align="center"&gt;&lt;img src="kealsql.png" alt="KealSql" width="360"&gt;&lt;/p&gt;</p>
 <p><strong><a href="https://geneacta.github.io/kealsql/">geneacta.github.io/kealsql</a></strong> · <a href="https://geneacta.github.io/kealsql/start.html">getting started</a> · <a href="https://geneacta.github.io/kealsql/docs.html">docs</a> · <a href="https://geneacta.github.io/keal/">the Keal language</a></p>
 <h1 id="kealsql">KealSql</h1>
 <p>A Keal-shaped language over PostgreSQL. A <code>.kealsql</code> file declares a schema and queries in the syntax of <a href="https://github.com/geneacta/keal">Keal</a>, and the compiler — itself a Keal program — turns them into plain PostgreSQL SQL, ahead of time, type-checked against the schema.</p>
@@ -85,7 +85,7 @@ LIMIT 1;</code></pre>
 <p>It is <strong>not a fork of PostgreSQL.</strong> The output is SQL for an unmodified server; nothing runs but the planner PostgreSQL already has.</p>
 <ul><li><a href="design.html">DESIGN.md</a> — the decisions and the reasons: why a transpiler, <code>Bool3</code>, <code>Id</code> / <code>Slug</code>, references, migrations.</li><li><a href="grammar.html">GRAMMAR.md</a> — the syntax, the well-formedness rules, and what each construct compiles to.</li><li><a href="https://github.com/geneacta/kealsql/blob/main/examples/shop.kealsql">examples/shop.kealsql</a> — a shop: six tables, two enums, twenty-odd queries and mutations, as an application would ship them; <code>shop.sql</code> is what they compile to and <code>shop.exec.sql</code> runs them on data.</li></ul>
 <h2 id="running-it">Running it</h2>
-<p>KealSql needs the Keal toolchain on the path, or beside the repository at <code>../keal</code> — at least <code>2790611</code> (after 1.2.0): <code>runCommand</code> with a standard input, <code>keal_runtime_init</code>, <code>Nothing</code> in the C backend, and the public lexer.</p>
+<p>KealSql needs the Keal toolchain on the path, or beside the repository at <code>../keal</code> — at least <code>9a0b5ad</code> (after 1.2.0): <code>runCommand</code> with a standard input, <code>Nothing</code> in the C backend, the public lexer, and the entry points and string ABI a host library uses (<code>keal_runtime_init</code>, <code>keal_program_run</code>, <code>keal_abi_str_*</code>).</p>
 <pre class="lang-sh"><code>keal src/main.keal file.kealsql                          # print the SQL
 keal src/main.keal --migrate file.kealsql --db mydb      # the migration from a live database to the file
 keal src/main.keal --migrate file.kealsql --db mydb --destructive
@@ -93,13 +93,14 @@ keal src/main.keal --plkeal build/ file.kealsql          # the stored functions 
 keal src/main.keal --lib build/file.so file.kealsql      # the SQL, CREATE FUNCTION naming that library
 keal src/main.keal --client app/ file.kealsql            # the queries as a Keal module over libpq
 tests/run.sh                                              # the suite: every case, byte for byte</code></pre>
-<p>From a program, the same queries are methods on a connection — <code>--client</code> writes the module, <code>keal build app.keal -I$(pg_config --includedir) -lpq</code> builds against it:</p>
-<pre><code>import &quot;./blog.client.keal&quot;
+<p>From a program, the same queries are methods on a connection. A Keal program imports the <code>.kealsql</code> itself — Keal's loader (<code>58f059a</code> or later) has <code>kealsql</code> write <code>.kealsql/blog.client.keal</code> beside it and reads that, regenerating when the file changes — and links with libpq:</p>
+<pre><code>import &quot;./blog.kealsql&quot;
 
-val db = connectBlog(&quot;dbname=blog&quot;)
+val db = createBlog(&quot;&quot;, &quot;blog&quot;)          // the database and its schema, made if missing
 for (p in db.byAuthor(&quot;ada&quot;)) { println(&quot;#${p.id} ${p.title}&quot;) }
 val editor = db.editorOf(1)              // String?
 db.close()</code></pre>
+<p><code>connectBlog(conninfo)</code> opens an existing one. <code>keal build app.keal -I$(pg_config --includedir) -lpq</code> builds it; <code>kealsql</code> is <code>keal build src/main.keal -o kealsql</code> put on the path, or named by <code>KEALSQL</code>. Without the loader, <code>kealsql --client DIR blog.kealsql</code> writes the same module to import by its own path.</p>
 <p><code>--migrate</code> reads the database through <code>psql</code> (<code>--db</code> is its <code>-d</code>; the <code>PG*</code> environment and <code>~/.pgpass</code> work as for <code>psql</code>) and prints the statements that bring it to the file, to review. Destructive ones — drops, narrowed types, a new <code>NOT NULL</code> — are held back as comments, each with what it would cost, until <code>--destructive</code>. A rename is written where it happens, <code>renamed(bio) about: String?</code> or <code>renamed(Post) table Article</code>, because a diff cannot tell a rename from a drop and an add.</p>
 <p>A <code>stored func</code> is Keal that runs <strong>inside</strong> PostgreSQL, as a <code>LANGUAGE C</code> function — the fastest procedural language the server has:</p>
 <pre><code>stored pure func slugify(s: String): String { ...ordinary Keal... }
@@ -120,6 +121,7 @@ func slugs(): List&lt;(String, String)&gt; {
     for (p in posts(u.id)) { sum += p.score ?: 0 }
     return sum
 }</code></pre>
+<p>On Windows (Git Bash), the compiler, the SQL and <code>--migrate</code> work — the suite runs its private PostgreSQL over TCP there — but the stored functions and the client are not built yet: an extension is a <code>.dll</code> linking <code>postgres.lib</code>, and <code>build.sh</code> does not know that shape.</p>
 <p>When PostgreSQL's <code>initdb</code> is on the machine, the suite also starts a private server in a temporary directory — no root, no configuration — loads every case's SQL into a fresh database, runs the <code>*.exec.sql</code> beside it in the same session, and compares the rows to <code>*.exec.out</code>; each <code>tests/migrations/*/</code> is built from <code>before.kealsql</code>, migrated to <code>after.kealsql</code>, applied in one transaction, and diffed again until it settles; each <code>tests/plkeal/*.kealsql</code> has its library built (server headers and a C compiler needed) and loaded, and its functions run. Without <code>initdb</code> it says so and compares the SQL only.</p>
 <p>The compiler runs on Keal's VM as written, and <code>keal build src/main.keal -o kealsql</code> compiles it to a native binary; the suite builds that binary and holds it to the same bytes as the VM on every case. The lexer is Keal's own, imported from the <code>keal</code> dependency pinned in <code>keal.toml</code>; <code>keal fetch</code> puts it under <code>.keal/deps/</code> (the suite runs it when missing).</p>
 <h2 id="layout">Layout</h2>

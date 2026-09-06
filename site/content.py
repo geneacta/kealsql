@@ -109,9 +109,9 @@ START = {
                 "<code>editor_of(2)</code> answers one row holding null: the post exists, its editor does not — the left join the <code>?.</code> asked for. Names are the file's, in <code>snake_case</code>.",
             ]),
             ("Use it from a program", [
-                "<code>--client</code> writes a Keal module in which every query is a method on a connection, with the same types — rows are records, <code>first()</code> answers a <code>T?</code>, a failing query is an exception with the query's name:",
+                "A Keal program imports the <code>.kealsql</code> itself. Keal's loader has <code>kealsql</code> write a module beside it — <code>.kealsql/blog.client.keal</code>, regenerated whenever the file is newer — in which every query is a method on a connection, with the same types: rows are records, <code>first()</code> answers a <code>T?</code>, a failing query is an exception with the query's name. Rename a column in the file and the program stops compiling:",
             ], "client", [
-                "The connection string is libpq's; an empty one leaves everything to the <code>PG*</code> environment and <code>~/.pgpass</code>. Build the program against <code>libpq</code>:",
+                "<code>createBlog(conninfo, dbname)</code> makes the database when it is missing and its schema when it holds none of the tables; <code>connectBlog(conninfo)</code> opens one that exists. The connection string is libpq's; an empty one leaves everything to the <code>PG*</code> environment and <code>~/.pgpass</code>. Build the program against <code>libpq</code>, with <code>kealsql</code> on the path (or named by <code>KEALSQL</code>):",
             ]),
             ("Evolve it", [
                 "Change the file — say, a <code>bio: String?</code> on <code>User</code>, and <code>Post</code> renamed to <code>Article</code> — and ask for the difference with the live database:",
@@ -164,9 +164,9 @@ START = {
                 "<code>editor_of(2)</code> répond une ligne qui tient null : le billet existe, son éditeur non — la jointure gauche que le <code>?.</code> demandait. Les noms sont ceux du fichier, en <code>snake_case</code>.",
             ]),
             ("L'utiliser depuis un programme", [
-                "<code>--client</code> écrit un module Keal où chaque requête est une méthode sur une connexion, avec les mêmes types — les lignes sont des records, <code>first()</code> répond un <code>T?</code>, une requête qui échoue est une exception portant le nom de la requête :",
+                "Un programme Keal importe le <code>.kealsql</code> lui-même. Le chargeur de Keal fait écrire par <code>kealsql</code> un module à côté — <code>.kealsql/blog.client.keal</code>, régénéré dès que le fichier est plus récent — où chaque requête est une méthode sur une connexion, avec les mêmes types : les lignes sont des records, <code>first()</code> répond un <code>T?</code>, une requête qui échoue est une exception portant le nom de la requête. Renommez une colonne dans le fichier et le programme cesse de compiler :",
             ], "client", [
-                "La chaîne de connexion est celle de libpq ; vide, elle laisse tout à l'environnement <code>PG*</code> et à <code>~/.pgpass</code>. Compilez le programme contre <code>libpq</code> :",
+                "<code>createBlog(conninfo, dbname)</code> crée la base si elle manque et son schéma si elle ne tient aucune des tables ; <code>connectBlog(conninfo)</code> ouvre une base qui existe. La chaîne de connexion est celle de libpq ; vide, elle laisse tout à l'environnement <code>PG*</code> et à <code>~/.pgpass</code>. Compilez le programme contre <code>libpq</code>, avec <code>kealsql</code> sur le chemin (ou nommé par <code>KEALSQL</code>) :",
             ]),
             ("La faire évoluer", [
                 "Changez le fichier — disons un <code>bio: String?</code> sur <code>User</code>, et <code>Post</code> renommé en <code>Article</code> — et demandez la différence avec la base vivante :",

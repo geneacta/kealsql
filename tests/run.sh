@@ -55,10 +55,10 @@ if "$KEAL" build src/main.keal -o "$NATIVE" > "$NATIVE.log" 2>&1; then
     for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
     for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
     RUN="$KEAL src/main.keal"; TAG=""
+    export KEALSQL="$NATIVE"              # what `import "./x.kealsql"` runs, below
 else
     echo "FAIL keal build src/main.keal"; grep -E "error" "$NATIVE.log" | head -5; failed=1
 fi
-rm -rf "$(dirname "$NATIVE")"
 
 # ---- against a real PostgreSQL
 PGBIN=$(command -v initdb > /dev/null && dirname "$(command -v initdb)" || ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)
@@ -134,18 +134,19 @@ for f in tests/plkeal/*.kealsql; do
 done
 
 # ---- the client: tests/client/NAME_app.keal over tests/cases/NAME.kealsql
-# The client module is generated, the app built with libpq against it and
-# run on a fresh database holding NAME.sql and NAME_seed.sql; its output
-# must be exactly NAME_app.out.
+# The app says `import "./NAME.kealsql"`: Keal's loader runs the compiler
+# ($KEALSQL, the native binary built above) to write .kealsql/NAME.client.keal,
+# the app is built with libpq and run on a fresh database holding NAME.sql
+# and NAME_seed.sql; its output must be exactly NAME_app.out.
 PGLIBINC=$("$PGBIN/pg_config" --includedir 2>/dev/null)
 for app in tests/client/*_app.keal; do
     [ -f "$app" ] || continue
     name=$(basename "${app%_app.keal}")
     if [ -n "$WINDOWS" ]; then echo "skip $app: the client is not built on Windows yet"; continue; fi
     if [ ! -f "$PGLIBINC/libpq-fe.h" ]; then echo "skip $app: libpq headers missing"; continue; fi
+    [ -n "${KEALSQL:-}" ] || { echo "skip $app: no native compiler for the import to run"; continue; }
     dir="$PGDIR/client/$name"; mkdir -p "$dir"
-    "$KEAL" src/main.keal --client "$dir" "tests/cases/$name.kealsql" > /dev/null || { echo "FAIL $app: --client"; failed=1; continue; }
-    cp "$app" "$dir/"
+    cp "$app" "tests/cases/$name.kealsql" "$dir/"
     if ! "$KEAL" build "$dir/$(basename "$app")" -I"$PGLIBINC" -lpq -o "$dir/app" > "$dir/build.log" 2>&1; then
         echo "FAIL $app: does not build"; grep -E "error" "$dir/build.log" | head -5; failed=1; continue
     fi
@@ -161,6 +162,7 @@ for app in tests/client/*_app.keal; do
     else echo "FAIL $exp"; printf '%s\n' "$out" | diff -u "$exp" - | head -20; failed=1
     fi
 done
+[ -n "${NATIVE:-}" ] && rm -rf "$(dirname "$NATIVE")"
 
 # ---- migrations: tests/migrations/NAME/{before,after}.kealsql
 # The database is built from before.kealsql; `--migrate after.kealsql` must
