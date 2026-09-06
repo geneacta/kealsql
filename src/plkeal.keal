@@ -266,17 +266,19 @@ package func plkealSource(compiler: Compiler): String {
 
     // ---- the C side
     out += "native \"\"\"\n"
-    out += "/* The Keal runtime, as the program's main would have set it up. Once per\n"
-    out += " * backend, when PostgreSQL loads the library; idempotent on Keal's side. */\n"
-    out += "void _PG_init(void) { keal_runtime_init(); }\n\n"
+    out += "/* What the program's main does: the runtime, then the program's own top\n"
+    out += " * level — which is what sets its globals. Once per backend, when PostgreSQL\n"
+    out += " * loads the library. Both are promised by `keal emit-header`. */\n"
+    out += "void keal_program_run(void);            /* defined after this block, promised by the header */\n"
+    out += "void _PG_init(void) { keal_runtime_init(); keal_program_run(); }\n\n"
     if (hasSpi) { out += spiBridge(queries) }
     if (hasOut) { out += outBridge() }
     if (not triggers.isEmpty()) { out += triggerBridge() }
     out += "/* Raises the panic the guard caught, once every Keal frame has returned. */\n"
     out += "static void plkeal_raise(void) {\n"
     out += "    KealStr* m = k_plkealMessage();\n"
-    out += "    char* msg = pnstrdup(m->bytes, (Size)m->len);\n"
-    out += "    keal_str_release(m);\n"
+    out += "    char* msg = pnstrdup(keal_abi_str_bytes(m), (Size)keal_abi_str_len(m));\n"
+    out += "    keal_abi_str_release(m);\n"
     out += "    ereport(ERROR, (errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION), errmsg(\"%s\", msg)));\n"
     out += "}\n\n"
     for (s in program.stored) {
@@ -305,8 +307,8 @@ package func plkealSource(compiler: Compiler): String {
                     "Bool" -> { out += "        bool a${i} = PG_GETARG_BOOL(${i});\n" }
                     else -> {
                         out += "        text* t${i} = PG_GETARG_TEXT_PP(${i});\n"
-                        out += "        KealStr* a${i} = keal_str_from_bytes(VARDATA_ANY(t${i}), VARSIZE_ANY_EXHDR(t${i}));\n"
-                        releases.add("        keal_str_release(a${i});\n")
+                        out += "        KealStr* a${i} = keal_abi_str_new(VARDATA_ANY(t${i}), VARSIZE_ANY_EXHDR(t${i}));\n"
+                        releases.add("        keal_abi_str_release(a${i});\n")
                     }
                 }
                 args.add("a${i}")
@@ -352,8 +354,8 @@ package func plkealSource(compiler: Compiler): String {
                 "Bool" -> { out += "    bool a${i} = PG_GETARG_BOOL(${i});\n" }
                 else -> {
                     out += "    text* t${i} = PG_GETARG_TEXT_PP(${i});\n"
-                    out += "    KealStr* a${i} = keal_str_from_bytes(VARDATA_ANY(t${i}), VARSIZE_ANY_EXHDR(t${i}));\n"
-                    releases.add("    keal_str_release(a${i});\n")
+                    out += "    KealStr* a${i} = keal_abi_str_new(VARDATA_ANY(t${i}), VARSIZE_ANY_EXHDR(t${i}));\n"
+                    releases.add("    keal_abi_str_release(a${i});\n")
                 }
             }
             args.add("a${i}")
@@ -369,7 +371,7 @@ package func plkealSource(compiler: Compiler): String {
             out += "    SPI_finish();\n"
         }
         out += "    if (k_plkealFailed()) {\n"
-        if (s.ret!!.name == "String") { out += "        keal_str_release(r);\n" }
+        if (s.ret!!.name == "String") { out += "        keal_abi_str_release(r);\n" }
         out += "        plkeal_raise();\n"
         out += "    }\n"
         when (s.ret!!.name) {
@@ -377,8 +379,8 @@ package func plkealSource(compiler: Compiler): String {
             "Float" -> { out += "    PG_RETURN_FLOAT8(r);\n" }
             "Bool" -> { out += "    PG_RETURN_BOOL(r);\n" }
             else -> {
-                out += "    text* result = cstring_to_text_with_len(r->bytes, (int)r->len);\n"
-                out += "    keal_str_release(r);\n"
+                out += "    text* result = cstring_to_text_with_len(keal_abi_str_bytes(r), (int)keal_abi_str_len(r));\n"
+                out += "    keal_abi_str_release(r);\n"
                 out += "    PG_RETURN_TEXT_P(result);\n"
             }
         }

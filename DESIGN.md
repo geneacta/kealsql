@@ -116,13 +116,14 @@ Cost to state: a subtransaction per query call — what PL/pgSQL pays for an
 exception block, paid here on every call. The alternative, an error that
 `longjmp`s through Keal, is the thing the rule forbids.
 
-Two things the runtime needed, found by doing it: the program's `main` is
-what sets the runtime up, so the entry points call `keal_runtime_init()`
-(added to Keal for this) from `_PG_init`; and a global must be right as C
-zeroes it (`var x: String? = null`), because that `main` never runs. And
-one backend bug found by a generated record with an `Int?` field, whose
-synthesised `toString` did not compile natively — fixed in Keal the same
-day (`9709d1b`), which is why KealSql wants that commit or later.
+What the runtime needed, found by doing it, and given by Keal: the
+library's `_PG_init` calls `keal_runtime_init()` and then
+`keal_program_run()` — the program's own top level under a name, which is
+what sets its globals (keal `ef43ad3`); strings cross through the five
+`keal_abi_str_*` calls the emitted header promises, `KealStr` staying
+opaque (`ca3a5df`); and a generated record with an `Int?` field found a
+backend bug in the synthesised `toString`, fixed the same day (`9709d1b`).
+KealSql wants Keal at `ef43ad3` or later.
 
 The rule that shaped the design: PostgreSQL reports errors with
 `longjmp` (`ereport`) and allocates with `palloc`. Measured on the Keal side
