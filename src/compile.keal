@@ -51,6 +51,7 @@ package class Plan() {
     package var orderKeys: List<String> = [] // the keys alone, without direction: for `distinct`
     package var distinct: Bool = false
     package var limit: String = ""
+    package var locking: String = ""         // FOR UPDATE [SKIP LOCKED]
     package var offset: String = ""
     package var grouped: Bool = false
     package var selects: List<String> = []
@@ -242,20 +243,29 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         }
     }
 
+    /// A stored function's arguments as pg_get_function_arguments prints them.
+    package func storedArgs(s: StoredN): String { s.params.map({ this.storedSqlType(it.ty) }).join(", ") }
+    package func storedResult(s: StoredN): String { this.storedSqlType(s.ret!!) }
+
+    package func storedFunctionDdl(s: StoredN): String {
+        val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
+        var out = "CREATE OR REPLACE FUNCTION ${sqlName(s.name)}(${this.storedArgs(s)}) RETURNS ${this.storedResult(s)}\n"
+        out += "    AS '${lib}', 'kealsql_${snakeName(s.name)}' LANGUAGE C STRICT${if (s.pure) { " IMMUTABLE" } else { "" }};"
+        return out
+    }
+
+    package func triggerDdl(tr: TriggerN): List<String> {
+        val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
+        val fn = "kealsql_trg_${snakeName(tr.name)}"
+        val f = "CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger\n    AS '${lib}', '${fn}' LANGUAGE C;"
+        val t = "CREATE OR REPLACE TRIGGER ${sqlName(tr.name)} ${tr.timing.toUpper()} ${tr.event.toUpper()} ON ${sqlName(tr.table)}\n    FOR EACH ROW EXECUTE FUNCTION ${fn}();"
+        return [f, t]
+    }
+
     package func storedDdl(): String {
         var out = ""
-        for (tr in this.program.triggers) {
-            val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
-            val fn = "kealsql_trg_${snakeName(tr.name)}"
-            out += "CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger\n    AS '${lib}', '${fn}' LANGUAGE C;\n"
-            out += "CREATE OR REPLACE TRIGGER ${sqlName(tr.name)} ${tr.timing.toUpper()} ${tr.event.toUpper()} ON ${sqlName(tr.table)}\n    FOR EACH ROW EXECUTE FUNCTION ${fn}();\n\n"
-        }
-        for (s in this.program.stored) {
-            val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
-            val params = s.params.map({ this.storedSqlType(it.ty) }).join(", ")
-            out += "CREATE OR REPLACE FUNCTION ${sqlName(s.name)}(${params}) RETURNS ${this.storedSqlType(s.ret!!)}\n"
-            out += "    AS '${lib}', 'kealsql_${snakeName(s.name)}' LANGUAGE C STRICT${if (s.pure) { " IMMUTABLE" } else { "" }};\n\n"
-        }
+        for (tr in this.program.triggers) { out += this.triggerDdl(tr).join("\n") + "\n\n" }
+        for (s in this.program.stored) { out += this.storedFunctionDdl(s) + "\n\n" }
         return out
     }
 
@@ -809,6 +819,17 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                     plan.grouped = true
                 }
                 "distinct" -> { this.noArgs(step); plan.distinct = true }
+                "forUpdate" -> {
+                    // Rows locked for the transaction; `forUpdate(skipLocked)` passes over rows others hold.
+                    if (step.args.size > 1) { this.fail(step.line, step.col, "`forUpdate()` or `forUpdate(skipLocked)`") }
+                    plan.locking = "FOR UPDATE"
+                    if (step.args.size == 1) {
+                        val a = step.args[0].value
+                        unless (a.kind == "ident" and a.text == "skipLocked") { this.fail(a.line, a.col, "`forUpdate` takes `skipLocked`, or nothing") }
+                        plan.locking = "FOR UPDATE SKIP LOCKED"
+                    }
+                    if (plan.grouped or plan.distinct) { this.fail(step.line, step.col, "`forUpdate` locks rows; a grouped or distinct query has none") }
+                }
                 "limit", "offset" -> {
                     val v = this.oneArg(step, "a count")
                     val e = this.emit(v, plan)
@@ -1005,6 +1026,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         else if (plan.fetch == "single") { lines.add("LIMIT 2") }
         else if (plan.limit != "") { lines.add("LIMIT ${plan.limit}") }
         if (plan.offset != "") { lines.add("OFFSET ${plan.offset}") }
+        if (plan.locking != "") { lines.add(plan.locking) }
         return lines.join("\n")
     }
 

@@ -16,6 +16,7 @@ EXECUTE release_years;
 EXECUTE summary;
 EXECUTE flags;
 EXECUTE all_tags;
+BEGIN; EXECUTE next_to_ship; COMMIT;
 EXECUTE crossed;
 INSERT INTO sale (product, units) VALUES (1, 2);
 EXECUTE with_sales;

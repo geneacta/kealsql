@@ -115,22 +115,34 @@ done
 # `--destructive` form must apply in one transaction, and a second
 # `--migrate` must then print exactly settled.sql — the notes, and nothing
 # to do.
+# A file with stored functions or triggers needs its library: built here, named by --lib.
+libfor() {
+    if grep -qE '^(stored|trigger) ' "$1"; then
+        [ -f "$PGINC/postgres.h" ] || return 1
+        dir="$PGDIR/plkeal/$(basename "$(dirname "$1")")_$(basename "${1%.kealsql}")"
+        "$KEAL" src/main.keal --plkeal "$dir" "$1" > /dev/null && KEAL="$KEAL" sh "$dir/build.sh" > "$dir/build.log" 2>&1 && echo "$dir/$(basename "${1%.kealsql}").so"
+    fi
+}
 for d in tests/migrations/*/; do
     name="mig_$(basename "$d")"
     $PSQL -d postgres -c "CREATE DATABASE $name" > /dev/null
-    if ! "$KEAL" src/main.keal "$d/before.kealsql" | $PSQL -d "$name" > /dev/null 2>&1; then
-        echo "FAIL $d: before.kealsql does not load"; failed=1; continue
+    blib=$(libfor "$d/before.kealsql") || { echo "skip $d: server headers missing for its library"; continue; }
+    alib=$(libfor "$d/after.kealsql") || { echo "skip $d: server headers missing for its library"; continue; }
+    LIBB=""; [ -n "$blib" ] && LIBB="--lib $blib"
+    LIBA=""; [ -n "$alib" ] && LIBA="--lib $alib"
+    if ! "$KEAL" src/main.keal $LIBB "$d/before.kealsql" | $PSQL -d "$name" > "$PGDIR/before.log" 2>&1; then
+        echo "FAIL $d: before.kealsql does not load"; head -3 "$PGDIR/before.log"; failed=1; continue
     fi
-    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" 2>&1); code=$?
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1 | sed "s|$PGDIR|PGDIR|g"); code=$?
     if [ "$code" != 0 ]; then echo "FAIL $d: --migrate exit $code"; echo "$out" | head -5; failed=1; continue; fi
     if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/expected.sql"; fi
     if ! printf '%s\n' "$out" | diff -u "$d/expected.sql" - > /dev/null 2>&1; then
         echo "FAIL $d/expected.sql"; printf '%s\n' "$out" | diff -u "$d/expected.sql" - | head -20; failed=1; continue
     fi
-    if ! "$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" --destructive | $PSQL -1 -d "$name" > "$PGDIR/apply.log" 2>&1; then
+    if ! "$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA --destructive | $PSQL -1 -d "$name" > "$PGDIR/apply.log" 2>&1; then
         echo "FAIL $d: the migration does not apply"; head -5 "$PGDIR/apply.log"; failed=1; continue
     fi
-    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" 2>&1)
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1 | sed "s|$PGDIR|PGDIR|g")
     if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/settled.sql"; fi
     if printf '%s\n' "$out" | diff -u "$d/settled.sql" - > /dev/null 2>&1; then echo "ok   $d migrates, applies, and settles"
     else echo "FAIL $d/settled.sql"; printf '%s\n' "$out" | diff -u "$d/settled.sql" - | head -20; failed=1

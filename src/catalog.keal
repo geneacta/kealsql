@@ -30,7 +30,13 @@ package class LiveTable(package val name: String) {
 /// it was not KealSql that made it).
 package class LiveView(package val name: String, package val fingerprint: String)
 
+/// A function KealSql made (its C symbol is `kealsql_...`), and a trigger.
+package class LiveFunction(package val name: String, package val args: String, package val result: String, package val lib: String, package val symbol: String)
+package class LiveTrigger(package val name: String, package val table: String, package val timing: String, package val event: String, package val function: String)
+
 package class Live() {
+    package var functions: List<LiveFunction> = []
+    package var triggers: List<LiveTrigger> = []
     package var views: List<LiveView> = []
     package var enums: Map<String, List<String>> = {}
     package var enumOrder: List<String> = []
@@ -67,6 +73,17 @@ SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), '')
 FROM pg_class c
 WHERE c.relkind = 'v' AND c.relnamespace = 'public'::regnamespace
 ORDER BY c.relname;
+SELECT 'F', p.proname, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), coalesce(p.probin, ''), p.prosrc
+FROM pg_proc p
+WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc LIKE 'kealsql\_%'
+ORDER BY p.proname;
+SELECT 'G', t.tgname, c.relname,
+       CASE WHEN (t.tgtype & 2) = 2 THEN 'before' ELSE 'after' END,
+       CASE WHEN (t.tgtype & 4) = 4 THEN 'insert' WHEN (t.tgtype & 8) = 8 THEN 'delete' ELSE 'update' END,
+       p.proname
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid
+WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace
+ORDER BY t.tgname;
 SELECT 'I', c.relname, i.relname,
        (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
@@ -138,6 +155,8 @@ package func parseLive(text: String): Live {
                 if (t != null) { t.indexes.add(LiveIndex(f[2], f[3].split(","))) }
             }
             "V" -> { live.views.add(LiveView(f[1], f[2])) }
+            "F" -> { live.functions.add(LiveFunction(f[1], f[2], f[3], f[4], f[5])) }
+            "G" -> { live.triggers.add(LiveTrigger(f[1], f[2], f[3], f[4], f[5])) }
             else -> {}
         }
     }

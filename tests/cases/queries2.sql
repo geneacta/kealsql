@@ -100,6 +100,15 @@ SELECT array_agg(product.sku ORDER BY product.sku DESC)
 FROM product
 LIMIT 2;
 
+-- func nextToShip(): List<String>
+PREPARE next_to_ship AS
+SELECT product.sku
+FROM product
+WHERE product.stock > 0
+ORDER BY product.sku
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
 -- func crossed(): Int
 PREPARE crossed AS
 SELECT count(*)

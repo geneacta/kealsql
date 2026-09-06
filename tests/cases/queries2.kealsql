@@ -87,6 +87,10 @@ func allTags(): List<String>? {
     from(Product).select(arrayAgg(sku, sku.desc)).single()
 }
 
+func nextToShip(): List<String> {
+    from(Product).where(stock > 0).orderBy(sku).limit(1).forUpdate(skipLocked).select(sku)
+}
+
 func crossed(): Int {
     from(Product as a).crossJoin(Product as b).where(a.id < b.id).count()
 }

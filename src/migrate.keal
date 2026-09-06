@@ -171,8 +171,48 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             }
         }
         this.views()
+        this.functions()
         this.dropEnums()
         return this.render()
+    }
+
+    /// Stored functions and triggers: created or replaced when missing or
+    /// different, dropped when KealSql made them and the file no longer
+    /// declares them. Nothing here loses rows.
+    proc functions() {
+        val program = this.compiler.program
+        val lib = if (this.compiler.lib == "") { "$" + "libdir/" + this.compiler.libStem() } else { this.compiler.lib }
+        // triggers first: a dropped function must not be in use
+        val trgNames = program.triggers.map({ snakeName(it.name) })
+        for (lt in this.live.triggers) {
+            unless (lt.function.startsWith("kealsql_trg_")) { continue }
+            val tr = program.triggers.find({ snakeName(it.name) == lt.name })
+            if (tr == null) { this.add("DROP TRIGGER ${quoteIf(lt.name)} ON ${quoteIf(lt.table)};") }
+        }
+        val fnNames = program.stored.map({ snakeName(it.name) })
+        for (lf in this.live.functions) {
+            val isTrigger = lf.symbol.startsWith("kealsql_trg_")
+            val wanted = if (isTrigger) { trgNames.contains(lf.name.drop(12)) } else { fnNames.contains(lf.name) }
+            unless (wanted) { this.add("DROP FUNCTION ${quoteIf(lf.name)}(${lf.args});") }
+        }
+        for (s in program.stored) {
+            val sn = snakeName(s.name)
+            val lf = this.live.functions.find({ it.name == sn })
+            val same = lf != null and lf.args == this.compiler.storedArgs(s) and lf.result == this.compiler.storedResult(s) and lf.lib == lib
+            unless (same) {
+                if (lf != null and lf.args != this.compiler.storedArgs(s)) { this.add("DROP FUNCTION ${quoteIf(sn)}(${lf.args});") }
+                this.add(this.compiler.storedFunctionDdl(s))
+            }
+        }
+        for (tr in program.triggers) {
+            val tn = snakeName(tr.name)
+            val ddl = this.compiler.triggerDdl(tr)
+            val lf = this.live.functions.find({ it.name == "kealsql_trg_" + tn })
+            if (lf == null or lf.lib != lib) { this.add(ddl[0]) }
+            val lt = this.live.triggers.find({ it.name == tn })
+            val same = lt != null and lt.table == snakeName(tr.table) and lt.timing == tr.timing and lt.event == tr.event
+            unless (same) { this.add(ddl[1]) }
+        }
     }
 
     /// Views: by name, and by the fingerprint of their SQL kept as a comment.

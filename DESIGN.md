@@ -394,6 +394,10 @@ parentheses.
   changed view from an unchanged one without parsing what the catalog
   prints back. A changed or foreign-made view is dropped and created
   again — no rows live in a view, so it is not destructive.
+* Stored functions and triggers are migrated too: created or replaced
+  when missing or different (arguments, result, library), dropped when
+  KealSql made them — their C symbol says so — and the file no longer
+  declares them. `--lib` names the library the migration installs.
 * The suite applies each test migration in one transaction and runs the
   diff again: it must then print nothing but the notes.
 * **Names.** A parameter shadows a column of the same name, as an inner

@@ -188,6 +188,7 @@ Stage         = "where"    "(" Expr ")"
               | "orderBy"  "(" OrderKey ( "," OrderKey )* ")"
               | "groupBy"  "(" Expr ( "," Expr )* ")"
               | "distinct" "(" ")"
+              | "forUpdate" "(" "skipLocked"? ")"          (* rows locked for the transaction *)
               | "limit"    "(" Expr ")"
               | "offset"   "(" Expr ")" ;
 OrderKey      = Expr ( "." ( "asc" | "desc" ) )? ( "." ( "nullsFirst" | "nullsLast" ) )? ;
@@ -267,6 +268,7 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 | `.orderBy(created.desc.nullsLast)` | `ORDER BY created DESC NULLS LAST` |
 | `.groupBy(author)` | `GROUP BY author` |
 | `.distinct()` | `SELECT DISTINCT` |
+| `.forUpdate()` / `.forUpdate(skipLocked)` | `FOR UPDATE` / `FOR UPDATE SKIP LOCKED` |
 | `.limit(n)` / `.offset(n)` | `LIMIT n` / `OFFSET n` |
 | `.select(*)` | `SELECT post.*` — typed as the table's record |
 | `.select(id, title)` | `SELECT id, title` — typed `(Int, String)` |

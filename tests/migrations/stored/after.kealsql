@@ -1,0 +1,9 @@
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+}
+stored pure func shout(s: String): String { s.toUpper() + "!" }
+stored pure func twice(n: Int, m: Int): Int { n * 2 + m }
+stored pure func half(x: Float): Float { x / 2.0 }
+trigger upperSku on Product after insert { }

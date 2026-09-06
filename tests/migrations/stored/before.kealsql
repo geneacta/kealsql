@@ -1,0 +1,9 @@
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+}
+stored pure func shout(s: String): String { s.toUpper() }
+stored pure func twice(n: Int): Int { n * 2 }
+trigger upperSku on Product before insert { return row.with(sku = row.sku.toUpper()) }
+trigger noop on Product after update { }
