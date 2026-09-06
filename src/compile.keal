@@ -291,7 +291,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     /// `blog` for `path/to/blog.kealsql`: the library's name.
     package func libStem(): String {
-        var base = this.file.split("/").last() ?: this.file
+        // Either separator: the path is the user's, and on Windows it is written with `\`.
+        var base = this.file.replace("\\", "/").split("/").last() ?: this.file
         if (base.endsWith(".kealsql")) { base = base.take(base.length - 8) }
         return snakeName(base)
     }
