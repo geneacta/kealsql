@@ -11,17 +11,31 @@
 # must be exactly NAME.exec.out. Without `initdb` those steps are skipped
 # and said so.
 cd "$(dirname "$0")/.." || exit 2
+# Messages in English and rows in psql's plain form, whatever the machine's
+# locale — the expected files were written that way.
+export LC_ALL=C
+# Windows (Git Bash, MSYS): PostgreSQL has no unix socket there, psql writes
+# CRLF, and an extension is a .dll — the server steps run over TCP, outputs
+# are normalised, and the library steps are skipped and say so.
+WINDOWS=""
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) WINDOWS=1;; esac
+[ "${OS:-}" = "Windows_NT" ] && WINDOWS=1
 KEAL="${KEAL:-../keal/target/release/keal}"
 case "$KEAL" in */*) KEAL="$(cd "$(dirname "$KEAL")" && pwd)/$(basename "$KEAL")";; esac   # build.sh cd's away
 [ -f .keal/deps/keal/selfhost/lexing.keal ] || "$KEAL" fetch > /dev/null || { echo "FAIL keal fetch: the lexer comes from the pinned keal"; exit 1; }
 failed=0
-python3 ci/band.py --check > /dev/null || { echo "FAIL README.md: the badge band is out of date (python3 ci/band.py)"; failed=1; }
+if python3 -c "pass" > /dev/null 2>&1; then
+    python3 ci/band.py --check > /dev/null || { echo "FAIL README.md: the badge band is out of date (python3 ci/band.py)"; failed=1; }
+else
+    echo "skip README.md band check: no python3 (the Windows Store stub does not count)"
+fi
 RUN="$KEAL src/main.keal"                # how a case is compiled: the VM, then the native binary
 TAG=""                                   # "[native] " on the second pass
 
 check() {
     f="$1"; exp="$2"; want="$3"
     out=$($RUN "$f" 2>&1); code=$?
+    out=$(printf '%s' "$out" | tr -d '\r')
     if [ "$code" != "$want" ]; then
         echo "FAIL $TAG$f: exit $code, expected $want"; echo "$out" | head -5; failed=1; return
     fi
@@ -57,9 +71,15 @@ PORT=54329
 stop() { "$PGBIN/pg_ctl" -D "$PGDIR/data" stop -m immediate > /dev/null 2>&1; rm -rf "$PGDIR"; }
 trap stop EXIT
 "$PGBIN/initdb" -D "$PGDIR/data" -A trust -U kealsql --no-locale -E UTF8 > "$PGDIR/initdb.log" 2>&1 || { echo "FAIL initdb"; cat "$PGDIR/initdb.log" | tail -5; exit 1; }
-"$PGBIN/pg_ctl" -D "$PGDIR/data" -o "-k $PGDIR -p $PORT -h ''" -l "$PGDIR/server.log" -w start > /dev/null 2>&1 || { echo "FAIL pg_ctl start"; tail -5 "$PGDIR/server.log"; exit 1; }
-PSQL="$PGBIN/psql -h $PGDIR -p $PORT -U kealsql -q -A -v ON_ERROR_STOP=1"
-export PGHOST="$PGDIR" PGPORT="$PORT" PGUSER=kealsql PATH="$PGBIN:$PATH"
+if [ -n "$WINDOWS" ]; then
+    PGHOSTV=127.0.0.1
+    "$PGBIN/pg_ctl" -D "$PGDIR/data" -o "-p $PORT -h 127.0.0.1" -l "$PGDIR/server.log" -w start > /dev/null 2>&1 || { echo "FAIL pg_ctl start"; tail -5 "$PGDIR/server.log"; exit 1; }
+else
+    PGHOSTV="$PGDIR"
+    "$PGBIN/pg_ctl" -D "$PGDIR/data" -o "-k $PGDIR -p $PORT -h ''" -l "$PGDIR/server.log" -w start > /dev/null 2>&1 || { echo "FAIL pg_ctl start"; tail -5 "$PGDIR/server.log"; exit 1; }
+fi
+PSQL="$PGBIN/psql -h $PGHOSTV -p $PORT -U kealsql -q -A -v ON_ERROR_STOP=1"
+export PGHOST="$PGHOSTV" PGPORT="$PORT" PGUSER=kealsql PATH="$PGBIN:$PATH"
 for f in tests/cases/*.sql examples/*.sql; do
     case "$f" in *.exec.sql) continue;; esac
     name=$(basename "${f%.sql}")
@@ -70,6 +90,7 @@ for f in tests/cases/*.sql examples/*.sql; do
     else
         out=$($PSQL -d "$name" -f "$f" 2>&1); code=$?
     fi
+    out=$(printf '%s' "$out" | tr -d '\r')
     if [ "$code" != 0 ]; then echo "FAIL $f on PostgreSQL"; echo "$out" | head -10; failed=1; continue; fi
     if [ -f "$exec_sql" ]; then
         if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$exp"; fi
@@ -91,6 +112,7 @@ for f in tests/plkeal/*.kealsql; do
     [ -f "$f" ] || continue
     check "$f" "${f%.kealsql}.sql" 0
     name=$(basename "${f%.kealsql}")
+    if [ -n "$WINDOWS" ]; then echo "skip $f on PostgreSQL: a Windows extension is a .dll linking postgres.lib, which build.sh does not make yet"; continue; fi
     if [ ! -f "$PGINC/postgres.h" ] || ! command -v cc > /dev/null; then
         echo "skip $f on PostgreSQL: server headers or a C compiler are missing"; continue
     fi
@@ -103,6 +125,7 @@ for f in tests/plkeal/*.kealsql; do
     "$KEAL" src/main.keal --lib "$out/$name.so" "$f" > "$out/$name.sql"
     exp="${f%.kealsql}.exec.out"
     result=$($PSQL -d "plk_$name" -f "$out/$name.sql" -f "${f%.kealsql}.exec.sql" 2>&1); code=$?
+    result=$(printf '%s' "$result" | tr -d '\r')
     if [ "$code" != 0 ]; then echo "FAIL $f on PostgreSQL"; echo "$result" | head -10; failed=1; continue; fi
     if [ -n "$UPDATE" ]; then printf '%s\n' "$result" > "$exp"; fi
     if printf '%s\n' "$result" | diff -u "$exp" - > /dev/null 2>&1; then echo "ok   $f builds, loads, and $(basename "${f%.kealsql}.exec.sql") matches"
@@ -118,6 +141,7 @@ PGLIBINC=$("$PGBIN/pg_config" --includedir 2>/dev/null)
 for app in tests/client/*_app.keal; do
     [ -f "$app" ] || continue
     name=$(basename "${app%_app.keal}")
+    if [ -n "$WINDOWS" ]; then echo "skip $app: the client is not built on Windows yet"; continue; fi
     if [ ! -f "$PGLIBINC/libpq-fe.h" ]; then echo "skip $app: libpq headers missing"; continue; fi
     dir="$PGDIR/client/$name"; mkdir -p "$dir"
     "$KEAL" src/main.keal --client "$dir" "tests/cases/$name.kealsql" > /dev/null || { echo "FAIL $app: --client"; failed=1; continue; }
@@ -129,6 +153,7 @@ for app in tests/client/*_app.keal; do
     $PSQL -d "client_$name" -f "tests/cases/$name.sql" > /dev/null 2>&1
     [ -f "tests/client/${name}_seed.sql" ] && $PSQL -d "client_$name" -f "tests/client/${name}_seed.sql" > /dev/null 2>&1
     out=$(PGDATABASE="client_$name" "$dir/app" 2>&1); code=$?
+    out=$(printf '%s' "$out" | tr -d '\r')
     exp="tests/client/${name}_app.out"
     if [ "$code" != 0 ]; then echo "FAIL $app: exit $code"; echo "$out" | head -10; failed=1; continue; fi
     if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$exp"; fi
@@ -146,6 +171,7 @@ done
 # A file with stored functions or triggers needs its library: built here, named by --lib.
 libfor() {
     if grep -qE '^(stored|trigger) ' "$1"; then
+        [ -z "$WINDOWS" ] || return 1
         [ -f "$PGINC/postgres.h" ] || return 1
         dir="$PGDIR/plkeal/$(basename "$(dirname "$1")")_$(basename "${1%.kealsql}")"
         "$KEAL" src/main.keal --plkeal "$dir" "$1" > /dev/null && KEAL="$KEAL" sh "$dir/build.sh" > "$dir/build.log" 2>&1 && echo "$dir/$(basename "${1%.kealsql}").so"
@@ -161,7 +187,8 @@ for d in tests/migrations/*/; do
     if ! "$KEAL" src/main.keal $LIBB "$d/before.kealsql" | $PSQL -d "$name" > "$PGDIR/before.log" 2>&1; then
         echo "FAIL $d: before.kealsql does not load"; head -3 "$PGDIR/before.log"; failed=1; continue
     fi
-    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1 | sed "s|$PGDIR|PGDIR|g"); code=$?
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1); code=$?
+    out=$(printf '%s' "$out" | tr -d '\r' | sed "s|$PGDIR|PGDIR|g")
     if [ "$code" != 0 ]; then echo "FAIL $d: --migrate exit $code"; echo "$out" | head -5; failed=1; continue; fi
     if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/expected.sql"; fi
     if ! printf '%s\n' "$out" | diff -u "$d/expected.sql" - > /dev/null 2>&1; then
@@ -170,7 +197,8 @@ for d in tests/migrations/*/; do
     if ! "$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA --destructive | $PSQL -1 -d "$name" > "$PGDIR/apply.log" 2>&1; then
         echo "FAIL $d: the migration does not apply"; head -5 "$PGDIR/apply.log"; failed=1; continue
     fi
-    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1 | sed "s|$PGDIR|PGDIR|g")
+    out=$("$KEAL" src/main.keal --migrate "$d/after.kealsql" --db "$name" $LIBA 2>&1)
+    out=$(printf '%s' "$out" | tr -d '\r' | sed "s|$PGDIR|PGDIR|g")
     if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$d/settled.sql"; fi
     if printf '%s\n' "$out" | diff -u "$d/settled.sql" - > /dev/null 2>&1; then echo "ok   $d migrates, applies, and settles"
     else echo "FAIL $d/settled.sql"; printf '%s\n' "$out" | diff -u "$d/settled.sql" - | head -20; failed=1

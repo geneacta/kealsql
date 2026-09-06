@@ -115,7 +115,10 @@ package func readLive(db: String, ns: String): Live {
         for (l in lines(r[2])) { if (l != "") { println("  ${l}") } }
         exit(1)
     }
-    return parseLive(r[1])
+    // psql on Windows writes CRLF; a `\r` glued to the last field of every line
+    // would make `Draft` six characters long. Tool output is normalised here,
+    // at the boundary, before anything reads it.
+    return parseLive(r[1].replace("\r", ""))
 }
 
 package func parseLive(text: String): Live {

@@ -78,7 +78,11 @@ if (source == null) {
     println("error: cannot read `${path}`")
     exit(1)
 }
-val program = parseFile(path, source)
+// A file checked out with CRLF (Windows' git default) reads as LF: the
+// lexer already treats `\r` as blank, but a stored function's body is
+// sliced out of the source as text, and would carry the `\r` into the
+// generated program.
+val program = parseFile(path, source.replace("\r\n", "\n"))
 val compiler = Compiler(path, program)
 compiler.lib = lib
 if (clientDir != "") {

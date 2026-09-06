@@ -1,0 +1,4 @@
+# The compiler emits LF and the suite compares bytes: every text file stays
+# LF on every platform, whatever core.autocrlf says on the machine.
+* text=auto eol=lf
+*.png binary
