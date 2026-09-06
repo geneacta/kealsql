@@ -271,7 +271,7 @@ package func plkealSource(compiler: Compiler): String {
     out += " * loads the library. Both are promised by `keal emit-header`. */\n"
     out += "void _PG_init(void) { keal_runtime_init(); keal_program_run(); }\n\n"
     if (hasSpi) { out += spiBridge(queries) }
-    if (hasOut) { out += outBridge() }
+    if (hasOut) { out += outBridge(not setofs.isEmpty()) }
     if (not triggers.isEmpty()) { out += triggerBridge() }
     out += "/* Raises the panic the guard caught, once every Keal frame has returned. */\n"
     out += "static void plkeal_raise(void) {\n"
@@ -413,8 +413,8 @@ package func plkealSource(compiler: Compiler): String {
 
 /// The out cells: what a trigger or a set-returning function answers, as
 /// text, one cell at a time.
-func outBridge(): String {
-    return """#include "funcapi.h"
+func outBridge(keep: Bool): String {
+    var out = """#include "funcapi.h"
 
 #define PLKEAL_OUT_MAX 65536
 static char** plkeal_out_cells;
@@ -438,7 +438,11 @@ static void plkeal_out_push(char* s) {
 void plkeal_out(const char* s) { plkeal_out_push(strdup(s)); }
 void plkeal_out_null(void) { plkeal_out_push(NULL); }
 
-/* The out cells copied into the current memory context, `ncols` per row;
+"""
+    // Only a set-returning function keeps the cells across calls; a file with
+    // triggers alone would leave the function unused, and -Wall says so.
+    if (keep) {
+        out += """/* The out cells copied into the current memory context, `ncols` per row;
  * the static buffer is free to be reused by a nested call. */
 static char** plkeal_out_keep(int ncols) {
     int rows = ncols ? plkeal_out_n / ncols : 0;
@@ -449,6 +453,8 @@ static char** plkeal_out_keep(int ncols) {
 }
 
 """
+    }
+    return out
 }
 
 /// The C half of the trigger bridge: the row and the old row as text cells,
