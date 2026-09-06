@@ -80,7 +80,7 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least `ef43ad3` (after 1.2.0): `runCommand` with a standard
+`../keal` — at least `9a0b5ad` (after 1.2.0): `runCommand` with a standard
 input, `Nothing` in the C backend, the public lexer, and the entry points
 and string ABI a host library uses (`keal_runtime_init`,
 `keal_program_run`, `keal_abi_str_*`).

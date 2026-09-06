@@ -123,7 +123,7 @@ what sets its globals (keal `ef43ad3`); strings cross through the five
 `keal_abi_str_*` calls the emitted header promises, `KealStr` staying
 opaque (`ca3a5df`); and a generated record with an `Int?` field found a
 backend bug in the synthesised `toString`, fixed the same day (`9709d1b`).
-KealSql wants Keal at `ef43ad3` or later.
+KealSql wants Keal at `9a0b5ad` or later.
 
 The rule that shaped the design: PostgreSQL reports errors with
 `longjmp` (`ereport`) and allocates with `palloc`. Measured on the Keal side

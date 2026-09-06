@@ -269,7 +269,6 @@ package func plkealSource(compiler: Compiler): String {
     out += "/* What the program's main does: the runtime, then the program's own top\n"
     out += " * level — which is what sets its globals. Once per backend, when PostgreSQL\n"
     out += " * loads the library. Both are promised by `keal emit-header`. */\n"
-    out += "int keal_program_run(void);             /* defined after this block, promised by the header; answers the exit code */\n"
     out += "void _PG_init(void) { keal_runtime_init(); keal_program_run(); }\n\n"
     if (hasSpi) { out += spiBridge(queries) }
     if (hasOut) { out += outBridge() }
