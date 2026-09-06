@@ -15,6 +15,7 @@ KEAL="${KEAL:-../keal/target/release/keal}"
 case "$KEAL" in */*) KEAL="$(cd "$(dirname "$KEAL")" && pwd)/$(basename "$KEAL")";; esac   # build.sh cd's away
 [ -f .keal/deps/keal/selfhost/lexing.keal ] || "$KEAL" fetch > /dev/null || { echo "FAIL keal fetch: the lexer comes from the pinned keal"; exit 1; }
 failed=0
+python3 ci/band.py --check > /dev/null || { echo "FAIL README.md: the badge band is out of date (python3 ci/band.py)"; failed=1; }
 RUN="$KEAL src/main.keal"                # how a case is compiled: the VM, then the native binary
 TAG=""                                   # "[native] " on the second pass
 
