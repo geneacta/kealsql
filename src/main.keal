@@ -7,6 +7,8 @@
 //                                                          build script for the PostgreSQL shared library
 //   keal src/main.keal --lib PATH file.kealsql             the SQL, with CREATE FUNCTION naming that library
 //   keal src/main.keal --client DIR file.kealsql            the queries as a Keal module over libpq
+//   keal src/main.keal --schema file.kealsql                only the CREATEs: enums, tables, views
+//   keal src/main.keal --queries file.kealsql               only what a session loads: functions and PREPAREs
 //
 // `--migrate` reads the database through `psql`; `--db` is psql's `-d`, and
 // without it the PG* environment and ~/.pgpass decide, as for psql itself.
@@ -26,6 +28,8 @@ func usage(): Nothing {
     println("       kealsql --plkeal DIR <file.kealsql>")
     println("       kealsql --lib PATH <file.kealsql>")
     println("       kealsql --client DIR <file.kealsql>")
+    println("       kealsql --schema <file.kealsql>        the CREATEs only")
+    println("       kealsql --queries <file.kealsql>       the functions and PREPAREs only")
     exit(2)
 }
 
@@ -35,6 +39,8 @@ var destructive = false
 var db = ""
 var plkealDir = ""
 var clientDir = ""
+var onlySchema = false
+var onlyQueries = false
 var lib = ""
 val argv = args()
 var i = 0
@@ -43,6 +49,8 @@ while (i < argv.size) {
     when (a) {
         "--migrate" -> { migrate = true }
         "--destructive" -> { destructive = true }
+        "--schema" -> { onlySchema = true }
+        "--queries" -> { onlyQueries = true }
         "--db" -> {
             i += 1
             if (i >= argv.size) { usage() }
@@ -72,6 +80,7 @@ while (i < argv.size) {
 }
 if (path == "") { usage() }
 if (destructive and not migrate) { usage() }
+if (onlySchema and onlyQueries) { usage() }
 
 val source = readFile(path)
 if (source == null) {
@@ -95,5 +104,5 @@ if (clientDir != "") {
     compiler.resolveSchema()
     print(Migration(compiler, readLive(db, schemaRaw(compiler.schema)), destructive).run())
 } else {
-    print(compiler.compile())
+    print(compiler.compileParts(not onlyQueries, not onlySchema))
 }

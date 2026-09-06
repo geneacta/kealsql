@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pas à pas — KealSql</title>
+<meta name="description" content="D&#x27;une machine nue à un programme Keal qui parle à une base PostgreSQL qu&#x27;il a créée lui-même : chaque commande, ce qu&#x27;elle fait, et ce que vous devez voir.">
+<link rel="canonical" href="https://geneacta.github.io/kealsql/fr/walkthrough.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealsql/walkthrough.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealsql/fr/walkthrough.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealsql/walkthrough.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KealSql">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="Pas à pas — KealSql">
+<meta property="og:description" content="D&#x27;une machine nue à un programme Keal qui parle à une base PostgreSQL qu&#x27;il a créée lui-même : chaque commande, ce qu&#x27;elle fait, et ce que vous devez voir.">
+<meta property="og:url" content="https://geneacta.github.io/kealsql/fr/walkthrough.html">
+<meta property="og:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pas à pas — KealSql">
+<meta name="twitter:description" content="D&#x27;une machine nue à un programme Keal qui parle à une base PostgreSQL qu&#x27;il a créée lui-même : chaque commande, ce qu&#x27;elle fait, et ce que vous devez voir.">
+<meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="start.html">Premiers pas</a><a href="walkthrough.html" class="tab-active">Pas à pas</a><a href="docs.html">Docs</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-lang" href="../walkthrough.html">English</a>
+    <a class="btn-keal" href="https://geneacta.github.io/keal/fr/">Keal</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
+  </div>
+</nav>
+<section class="hero"><h1>Pas à pas.</h1><p class="lede">D'une machine nue à un programme Keal qui parle à une base PostgreSQL qu'il a créée lui-même. Chaque commande est donnée, avec ce qu'elle fait et ce que l'écran doit montrer avant de continuer. Comptez une demi-heure, surtout à attendre des compilateurs.</p></section>
+<section class="band" id="avant-de-commencer"><h2>Avant de commencer</h2>
+<p class="lede">Il faut un terminal et une connexion internet. Les commandes sont celles de Linux (Debian, Ubuntu) et macOS ; des notes Windows sont données là où ça diffère — le compilateur, le SQL et les migrations y marchent sous Git Bash, les fonctions stockées et le client pas encore.</p>
+<p class="lede">Quand une commande commence par <code>sudo</code>, la machine demandera votre mot de passe : c'est pour installer des paquets système, rien d'autre.</p>
+</section>
+<section class="band" id="installer-rust"><h2>1. Installer Rust</h2>
+<p class="lede">Le compilateur de Keal se construit avec l'outillage de Rust, et c'est la seule raison d'en avoir besoin. <code>rustup</code> l'installe dans votre répertoire personnel, sans root :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>curl --proto &#x27;=https&#x27; --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. &quot;$HOME/.cargo/env&quot;
+cargo --version</pre><div class="cwin-out"><pre>cargo 1.8x.x (…)</pre></div></div>
+<p class="lede">Sous Windows, téléchargez <code>rustup-init.exe</code> sur <a href="https://rustup.rs">rustup.rs</a> et choisissez l'outillage <em>GNU</em> (<code>x86_64-pc-windows-gnu</code>) avec MinGW : c'est celui avec lequel KealSql a été testé.</p>
+</section>
+<section class="band" id="construire-keal"><h2>2. Construire Keal</h2>
+<p class="lede">Keal est le langage dans lequel KealSql est écrit et vers lequel il compile. Clonez-le, construisez-le, et mettez le binaire sur votre chemin. La construction prend une ou deux minutes.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>git clone https://github.com/geneacta/keal
+cd keal
+cargo build --release
+export PATH=&quot;$PWD/target/release:$PATH&quot;
+keal version
+cd ..</pre><div class="cwin-out"><pre>keal 1.2.0</pre></div></div>
+<p class="lede">La ligne <code>export PATH</code> ne vaut que pour ce terminal ; ajoutez-la au fichier de démarrage de votre shell (<code>~/.bashrc</code>, <code>~/.zshrc</code>) pour la garder. <code>cargo install --path .</code> dans <code>keal/</code> est l'alternative permanente.</p>
+<p class="lede">KealSql veut un Keal plus récent que la version 1.2.0 — le commit <code>58f059a</code> ou après, ce qu'est <code>main</code>.</p>
+</section>
+<section class="band" id="installer-postgresql"><h2>3. Installer PostgreSQL</h2>
+<p class="lede">La base elle-même, ses outils clients, et — pour les fonctions stockées et le client — ses en-têtes de développement.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre># Debian, Ubuntu
+sudo apt install postgresql postgresql-server-dev-all libpq-dev
+
+# macOS avec Homebrew
+brew install postgresql@17
+brew services start postgresql@17
+
+psql --version
+pg_config --includedir</pre><div class="cwin-out"><pre>psql (PostgreSQL) 17.x
+/usr/include/postgresql</pre></div></div>
+<p class="lede">Sous Windows, l'<a href="https://www.enterprisedb.com/downloads/postgres-postgresql-downloads">installeur EDB</a> donne <code>psql</code>, <code>createdb</code> et <code>pg_config</code> ; ajoutez son répertoire <code>bin</code> au chemin.</p>
+</section>
+<section class="band" id="se-donner-un-utilisateur-de-base"><h2>4. Se donner un utilisateur de base</h2>
+<p class="lede">PostgreSQL a ses propres utilisateurs. Sous Linux le serveur est installé avec un seul, <code>postgres</code>, que seul l'utilisateur système du même nom peut devenir ; le plus simple est de créer un utilisateur PostgreSQL à votre nom de login, pour que <code>psql</code> se connecte sans rien demander :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>sudo -u postgres createuser --superuser &quot;$USER&quot;
+psql -d postgres -c &#x27;select current_user&#x27;</pre><div class="cwin-out"><pre> current_user
+--------------
+ renard
+(1 row)</pre></div></div>
+<p class="lede">Sous macOS avec Homebrew, le serveur connaît déjà votre utilisateur ; sautez la première ligne. Sous Windows, l'installeur vous a demandé le mot de passe de <code>postgres</code> : posez <code>PGUSER=postgres</code> et <code>PGPASSWORD=…</code> dans l'environnement, ou écrivez-les dans <code>%APPDATA%\postgresql\pgpass.conf</code>.</p>
+<p class="lede"><strong>Si ça ne marche pas :</strong> <em>peer authentication failed</em> veut dire que l'utilisateur PostgreSQL n'existe pas encore — la première ligne a échoué, lisez son message. <em>connection refused</em> veut dire que le serveur ne tourne pas : <code>sudo systemctl start postgresql</code> sous Linux.</p>
+</section>
+<section class="band" id="r-cup-rer-kealsql"><h2>5. Récupérer KealSql</h2>
+<p class="lede">Clonez-le, récupérez le morceau de Keal qu'il importe (son lexer, épinglé sur un commit), et construisez le compilateur en un binaire nommé <code>kealsql</code>. Le chargeur de Keal cherchera ce binaire par son nom quand un programme importera un fichier <code>.kealsql</code>.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>git clone https://github.com/geneacta/kealsql
+cd kealsql
+keal fetch
+keal build src/main.keal -o kealsql
+export PATH=&quot;$PWD:$PATH&quot;
+kealsql tests/cases/blog.kealsql | head -5
+cd ..</pre><div class="cwin-out"><pre>CREATE TABLE &quot;user&quot; (
+    id serial PRIMARY KEY,
+    name text UNIQUE NOT NULL,
+    email text UNIQUE NOT NULL,
+    bio text</pre></div></div>
+<p class="lede">Tant que le binaire n'est pas sur le chemin, <code>keal src/main.keal fichier.kealsql</code> fait la même chose sur la VM de Keal, et <code>export KEALSQL=/chemin/vers/kealsql</code> dit au chargeur où il est.</p>
+<p class="lede"><strong>Facultatif mais rassurant :</strong> <code>tests/run.sh</code> lance toute la suite. Avec PostgreSQL installé, elle démarre un serveur privé dans un répertoire temporaire et y exécute chaque cas ; les dernières lignes doivent être des <code>ok</code> et des <code>skip</code>, jamais un <code>FAIL</code>.</p>
+</section>
+<section class="band" id="crire-votre-premier-fichier"><h2>6. Écrire votre premier fichier</h2>
+<p class="lede">Faites un répertoire pour le projet et écrivez le schéma et ses requêtes. C'est le blog que la suite utilise ; lisez les notes dessous.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>mkdir monblog
+cd monblog
+# puis créez blog.kealsql avec le contenu ci-dessous</pre></div>
+</section>
+<section class="band" id="le-fichier-expliqu"><h2>7. Le fichier, expliqué</h2>
+<div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span></div><pre>enum Status { Draft, Published }
+
+table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    bio:     String?
+}
+
+table Post {
+    id:       Id
+    cascade author: RefId&lt;User&gt;
+    editor:   RefId&lt;User&gt;?
+    title:    String
+    status:   Status
+    created:  Timestamp
+}
+
+func byAuthor(name: String): List&lt;(Int, String)&gt; {
+    from(Post as p)
+        .where(p.author.name == name)
+        .where(status == Published)
+        .orderBy(created.desc)
+        .select(p.id, p.title)
+}
+
+func editorOf(post: Int): String? {
+    from(Post).where(id == post).select(editor?.name).first()
+}
+
+func drafts(): Int {
+    from(Post).where(status == Draft).count()
+}
+
+func publish(post: Int): Post {
+    update(Post).where(id == post).set(status = Published)
+}
+
+proc forget(user: RefId&lt;User&gt;) {
+    delete(Post).where(author == user)
+}</pre></div>
+<p class="lede"><code>enum Status</code> devient un type enum PostgreSQL. <code>table User { … }</code> devient une table : <code>id: Id</code> est une clé primaire serial, <code>name: Slug</code> un texte unique — chaque table a un primary et au plus un slug. <code>String?</code> est une colonne qui peut être nulle ; <code>String</code> ne peut pas.</p>
+<p class="lede"><code>cascade author: RefId&lt;User&gt;</code> est une clé étrangère vers le primary de <code>User</code>, supprimée avec l'utilisateur ; <code>editor: RefId&lt;User&gt;?</code> en est une optionnelle, mise à null quand l'utilisateur disparaît.</p>
+<p class="lede">Une <code>func</code> est une requête avec un nom, des paramètres et un résultat déclaré. Elle se lit de <code>from</code> à <code>select</code>, dans l'ordre où la base l'évalue. <code>p.author.name</code> suit la référence — une jointure que le compilateur écrit. <code>editor?.name</code> en suit une optionnelle — une jointure <em>gauche</em>, et le résultat est <code>String?</code>. Un <code>proc</code> est une modification qui ne répond rien.</p>
+</section>
+<section class="band" id="le-compiler"><h2>8. Le compiler</h2>
+<p class="lede">Le compilateur transforme le fichier en SQL : les tables en instructions <code>CREATE</code>, puis une instruction préparée par requête. Regardez le fichier écrit ; c'est du SQL ordinaire que vous auriez pu taper.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>kealsql blog.kealsql &gt; blog.sql
+grep -c PREPARE blog.sql
+grep -A5 &#x27;func editorOf&#x27; blog.sql</pre><div class="cwin-out"><pre>5
+-- func editorOf(post: Int): String?
+PREPARE editor_of(integer) AS
+SELECT editor.name
+FROM post
+LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
+WHERE post.id = $1</pre></div></div>
+<p class="lede"><strong>Si ça ne marche pas :</strong> une ligne <code>error blog.kealsql:L:C …</code> nomme l'endroit et dit quoi écrire. La plus fréquente sur un premier fichier : une colonne nommée dans une requête que la table n'a pas.</p>
+</section>
+<section class="band" id="cr-er-la-base"><h2>9. Créer la base</h2>
+<p class="lede"><code>createdb</code> fait une base vide nommée <code>blog</code> ; y charger le fichier compilé fait les tables. Puis regardez-les.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>createdb blog
+psql -d blog -f blog.sql
+psql -d blog -c &#x27;\dt&#x27;</pre><div class="cwin-out"><pre>         List of tables
+ Schema | Name | Type  |  Owner
+--------+------+-------+--------
+ public | post | table | you
+ public | user | table | you
+(2 rows)</pre></div></div>
+<p class="lede">Les instructions <code>CREATE</code> sont permanentes. Les <code>PREPARE</code> ne le sont pas : elles vivent le temps de la session <code>psql</code> qui les a exécutées. C'est pourquoi l'étape suivante les recharge, avec <code>--queries</code>, dans la session qui s'en sert — et pourquoi un programme (étape 12) prépare les siennes.</p>
+</section>
+<section class="band" id="mettre-des-lignes-et-les-interroger"><h2>10. Mettre des lignes, et les interroger</h2>
+<p class="lede">Une session <code>psql</code> : charger les requêtes — <code>--queries</code> imprime les <code>PREPARE</code> sans les <code>CREATE</code>, qui échoueraient sur des tables qui existent — insérer deux utilisateurs et trois billets, et appeler les requêtes par leur nom. <code>EXECUTE</code> est la façon d'appeler une instruction préparée ; les noms sont ceux du fichier, en <code>snake_case</code>.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>kealsql --queries blog.kealsql &gt; queries.sql
+psql -d blog
+
+blog=&gt; \i queries.sql
+blog=&gt; INSERT INTO &quot;user&quot; (name, email) VALUES (&#x27;ada&#x27;, &#x27;ada@x&#x27;), (&#x27;bob&#x27;, &#x27;bob@x&#x27;);
+blog=&gt; INSERT INTO post (author, editor, title, status, created) VALUES
+         (1, 2, &#x27;Hello&#x27;, &#x27;Published&#x27;, now()),
+         (1, NULL, &#x27;Draft one&#x27;, &#x27;Draft&#x27;, now()),
+         (2, NULL, &#x27;Bob post&#x27;, &#x27;Published&#x27;, now());
+blog=&gt; EXECUTE by_author(&#x27;ada&#x27;);
+blog=&gt; EXECUTE editor_of(2);
+blog=&gt; EXECUTE drafts;
+blog=&gt; \q</pre><div class="cwin-out"><pre> id | title
+----+-------
+  1 | Hello
+(1 row)
+
+ name
+------
+
+(1 row)
+
+ count
+-------
+     1
+(1 row)</pre></div></div>
+<p class="lede"><code>editor_of(2)</code> répond une ligne qui ne tient rien : le billet 2 existe et n'a pas d'éditeur. C'est la jointure gauche que le <code>?.</code> du fichier demandait. <code>by_author('ada')</code> répond un billet, pas deux : le fichier dit <code>status == Published</code>, et le second billet d'Ada est un brouillon.</p>
+</section>
+<section class="band" id="crire-un-programme-keal-qui-s-en-sert"><h2>11. Écrire un programme Keal qui s&#x27;en sert</h2>
+<p class="lede">Maintenant les mêmes requêtes depuis un programme. Un programme Keal importe le fichier <code>.kealsql</code> lui-même ; le chargeur de Keal lance <code>kealsql</code> pour écrire un module à côté, <code>.kealsql/blog.client.keal</code>, où chaque requête est une méthode sur une connexion. Écrivez <code>app.keal</code> à côté de <code>blog.kealsql</code> :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">app.keal</span></div><pre>import &quot;./blog.kealsql&quot;
+
+// La base et ses tables, créées si elles manquent ; une connexion dessus.
+val db = createBlog(&quot;&quot;, &quot;blog&quot;)
+
+println(&quot;drafts: ${db.drafts()}&quot;)
+for (p in db.byAuthor(&quot;ada&quot;)) {
+    println(&quot;#${p.id} ${p.title}&quot;)
+}
+val editor = db.editorOf(1)
+println(&quot;editor of #1: ${editor ?: &quot;none&quot;}&quot;)
+db.close()</pre></div>
+<p class="lede"><code>createBlog("", "blog")</code> : le premier argument est une chaîne de connexion libpq — vide, elle prend les mêmes défauts que <code>psql</code> (votre utilisateur, le serveur local) ; le second est le nom de la base, créée si elle n'existe pas. Ici elle existe, avec des lignes, donc l'appel ne fait que se connecter.</p>
+<p class="lede"><code>db.byAuthor("ada")</code> répond une liste de records avec <code>id</code> et <code>title</code> ; <code>db.editorOf(1)</code> répond un <code>String?</code>, d'où le <code>?: "none"</code>.</p>
+</section>
+<section class="band" id="le-construire-et-le-lancer"><h2>12. Le construire et le lancer</h2>
+<p class="lede">Le programme se lie à <code>libpq</code>, la bibliothèque cliente de PostgreSQL ; les deux drapeaux disent où sont son en-tête et sa bibliothèque.</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>keal build app.keal -I$(pg_config --includedir) -lpq -o app
+./app
+ls .kealsql</pre><div class="cwin-out"><pre>drafts: 1
+#1 Hello
+editor of #1: bob
+blog.client.keal</pre></div></div>
+<p class="lede">Le répertoire <code>.kealsql/</code> tient le module généré. Commitez-le avec le projet : un checkout se construit alors sans <code>kealsql</code> installé, et Keal le régénère dès que <code>blog.kealsql</code> est plus récent.</p>
+<p class="lede"><strong>Si ça ne marche pas :</strong> <em>cannot generate … `kealsql` is not installed</em> — le binaire de l'étape 6 n'est pas sur le chemin ; <code>export KEALSQL=/chemin/vers/kealsql</code>. <em>libpq-fe.h: No such file</em> — installez <code>libpq-dev</code> (Linux) et vérifiez <code>pg_config --includedir</code>. <em>connection refused</em> ou <em>authentication failed</em> — étape 5.</p>
+</section>
+<section class="band" id="changer-le-fichier-et-laisser-le-compilateur-vous-rattraper"><h2>13. Changer le fichier, et laisser le compilateur vous rattraper</h2>
+<p class="lede">Renommez la requête <code>drafts</code> en <code>draftCount</code> dans <code>blog.kealsql</code> et reconstruisez le programme, sans y toucher :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>sed -i &#x27;s/func drafts()/func draftCount()/&#x27; blog.kealsql
+keal build app.keal -I$(pg_config --includedir) -lpq -o app</pre><div class="cwin-out"><pre>error: `BlogDb` has no method `drafts`
+  --&gt; app.keal:6:23</pre></div></div>
+<p class="lede">Le chargeur a vu que le fichier était plus récent, a régénéré le module, et le programme a cessé de compiler à la ligne qui utilisait l'ancien nom. C'est tout le propos : une requête que le fichier n'a plus est une erreur dans le programme, pas un échec à l'exécution. Remettez <code>drafts</code>, ou corrigez le programme.</p>
+</section>
+<section class="band" id="faire-voluer-le-sch-ma"><h2>14. Faire évoluer le schéma</h2>
+<p class="lede">Ajoutez une colonne au fichier — <code>bio: String?</code> y est déjà ; ajoutez <code>joined: Date?</code> dessous dans <code>User</code> — et demandez ce qui manque à la base vivante :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>kealsql --migrate blog.kealsql --db blog</pre><div class="cwin-out"><pre>ALTER TABLE &quot;user&quot; ADD COLUMN joined date;</pre></div></div>
+<p class="lede">Rien n'a été appliqué : la migration est imprimée pour que vous la lisiez. Appliquez-la en une transaction et redemandez — la réponse doit être <em>nothing to do</em> :</p>
+</section>
+<section class="band" id="appliquer-la-migration"><h2>15. Appliquer la migration</h2>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>kealsql --migrate blog.kealsql --db blog &gt; migration.sql
+psql -1 -d blog -f migration.sql
+kealsql --migrate blog.kealsql --db blog</pre><div class="cwin-out"><pre>-- nothing to do: the database matches the declaration</pre></div></div>
+<p class="lede">Une colonne supprimée, un type rétréci ou un nouveau <code>NOT NULL</code> seraient imprimés en commentaires, retenus jusqu'à ce que vous passiez <code>--destructive</code> — le compilateur nomme ce qu'ils coûteraient. Un renommage n'est jamais deviné : écrivez <code>renamed(ancienNom) nouveauNom: Type</code> dans le fichier, et la migration renomme.</p>
+</section>
+<section class="band" id="du-keal-dans-le-serveur-linux-et-macos"><h2>16. Du Keal dans le serveur (Linux et macOS)</h2>
+<p class="lede">Une <code>stored func</code> est du Keal que PostgreSQL exécute comme fonction native. Ajoutez-en une à <code>blog.kealsql</code> et servez-vous-en dans une requête :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql (ajouté)</span></div><pre>stored pure func shout(s: String): String { s.toUpper() + &quot;!&quot; }
+
+func shouted(): List&lt;String&gt; {
+    from(Post).orderBy(id).select(shout(title))
+}</pre></div>
+<p class="lede">Puis générez la source de la bibliothèque, construisez-la contre les en-têtes serveur, et chargez les fonctions avec le chemin de la bibliothèque — <code>--queries</code>, parce que les tables existent :</p>
+</section>
+<section class="band" id="construire-et-charger-la-biblioth-que"><h2>17. Construire et charger la bibliothèque</h2>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ Vous devez voir</span></div><pre>kealsql --plkeal build/ blog.kealsql
+sh build/build.sh
+kealsql --lib &quot;$PWD/build/blog.so&quot; --queries blog.kealsql | psql -d blog
+psql -d blog -c &quot;SELECT shout(&#x27;hello&#x27;)&quot;</pre><div class="cwin-out"><pre> shout
+--------
+ HELLO!
+(1 row)</pre></div></div>
+<p class="lede"><strong>Si ça ne marche pas :</strong> <em>postgres.h: No such file</em> — les en-têtes serveur manquent : <code>postgresql-server-dev-all</code> sous Debian et Ubuntu. Sous Windows cette étape n'est pas encore disponible.</p>
+</section>
+<section class="band" id="et-ensuite"><h2>18. Et ensuite</h2>
+<p class="lede"><a href="start.html">Premiers pas</a> est le même parcours en cinq minutes ; <a href="docs.html">les docs</a> tiennent le design, la grammaire avec ce que chaque construction compile, et le README. <a href="https://github.com/geneacta/kealsql/blob/main/examples/shop.kealsql">examples/shop.kealsql</a> est un vrai fichier plus gros à lire ensuite.</p>
+</section>
+<footer class="foot">
+  <div class="foot-l">Un langage à la forme de Keal sur PostgreSQL. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealsql">Les sources sur GitHub</a>
+    <a href="design.html">Design</a>
+    <a href="grammar.html">Grammaire</a>
+  </div>
+</footer>
+</div>
+<script src="../site.js"></script>
+</body>
+</html>

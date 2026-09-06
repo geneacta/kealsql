@@ -505,7 +505,16 @@ kealsql --migrate file.kealsql [--db NAME] [--destructive]
 kealsql --plkeal DIR file.kealsql                      the stored functions as DIR/<stem>.keal and DIR/build.sh
 kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCTIONs naming that library
 kealsql --client DIR file.kealsql                      the queries as DIR/<stem>.client.keal, a module over libpq
+kealsql --schema file.kealsql                          the CREATEs only: enums, tables, views — loaded once
+kealsql --queries file.kealsql                         the functions and PREPAREs only — what a session loads
 ```
+
+Without a flag, the SQL is both. The split follows PostgreSQL: the
+`CREATE`s are permanent and would fail a second time, the `PREPARE`s live
+for the session that runs them, and the `CREATE OR REPLACE FUNCTION`s
+load again harmlessly — so a `psql` session that wants the queries runs
+`--queries`, and a database is made with `--schema` (or with everything,
+the first time).
 
 `--client` writes the Keal module a program gets by writing
 `import "./blog.kealsql"` — Keal's loader runs `kealsql --client

@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = os.path.join(ROOT, "site")
 sys.path.insert(0, SITE)
 import content as C  # noqa: E402
+import walk as WK  # noqa: E402
 
 BASE_URL = "https://geneacta.github.io/kealsql/"
 VERSION = "v0.1.0"
@@ -168,8 +169,8 @@ def markdown(text):
 # The way back to Keal's own site is the `btn-keal` badge on the right, as
 # keal-view has it, so the tabs are this site's pages only.
 NAV = {
-    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("docs.html", "Docs")],
-    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("docs.html", "Docs")],
+    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("walkthrough.html", "Step by step"), ("docs.html", "Docs")],
+    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("walkthrough.html", "Pas à pas"), ("docs.html", "Docs")],
 }
 
 FOOTER = {
@@ -412,6 +413,29 @@ def start(lang, S):
     return page(lang, "start.html", t["title"], t["desc"], "\n".join(parts), active="start.html")
 
 
+def walkthrough(lang, S):
+    """Every step from a bare machine to a running program, with what to see."""
+    t = WK.WALK[lang]
+    parts = ['<section class="hero"><h1>%s</h1><p class="lede">%s</p></section>' % (t["h1"], t["lede"])]
+    n = 0
+    for head, before, code, output, after in t["steps"]:
+        anchor = slug(head)
+        numbered = "%d. %s" % (n, head) if n else head
+        parts.append('<section class="band" id="%s"><h2>%s</h2>' % (anchor, html.escape(numbered)))
+        parts += ["<p class=\"lede\">%s</p>" % p for p in before]
+        if code is not None:
+            if isinstance(code, tuple):
+                parts.append(code_window(code[0], code[1]))
+            elif code == "KEY:blog":
+                parts.append(code_window("blog.kealsql", S["blog"]))
+            else:
+                parts.append(code_window(t["shell"], code, output, t["check"]))
+        parts += ["<p class=\"lede\">%s</p>" % p for p in after]
+        parts.append("</section>")
+        n += 1
+    return page(lang, "walkthrough.html", t["title"], t["desc"], "\n".join(parts), active="walkthrough.html")
+
+
 def docs_index(lang):
     t = C.DOCS[lang]
     cards = "".join('<a class="card" href="%s"><h3>%s</h3><p>%s</p></a>' % (h, n, d) for h, n, d in t["pages"])
@@ -431,13 +455,14 @@ def main():
     for lang in ("en", "fr"):
         written.append(write(lang, "index.html", landing(lang, S)))
         written.append(write(lang, "start.html", start(lang, S)))
+        written.append(write(lang, "walkthrough.html", walkthrough(lang, S)))
         written.append(write(lang, "docs.html", docs_index(lang)))
         for src, fn, title in (("DESIGN.md", "design.html", "Design"), ("GRAMMAR.md", "grammar.html", "Grammar"), ("README.md", "readme.html", "README")):
             written.append(write(lang, fn, doc_page(lang, src, fn, title)))
     # the sitemap and robots, as GitHub Pages wants them
     urls = []
     for lang in ("en", "fr"):
-        for fn in ("index.html", "start.html", "docs.html", "design.html", "grammar.html", "readme.html"):
+        for fn in ("index.html", "start.html", "walkthrough.html", "docs.html", "design.html", "grammar.html", "readme.html"):
             urls.append(BASE_URL + ("" if lang == "en" else "fr/") + fn)
     with open(os.path.join(SITE, "sitemap.xml"), "w", encoding="utf-8", newline="") as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')

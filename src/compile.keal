@@ -1964,10 +1964,22 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     // ---- the whole file -----------------------------------------------
 
-    package func compile(): String {
+    /// The whole output: the schema, the stored functions, the prepared statements.
+    package func compile(): String { this.compileParts(true, true) }
+
+    /// `schema`: enums, tables, views — what is created once. `queries`: the
+    /// stored functions and triggers (CREATE OR REPLACE, so they load again)
+    /// and one PREPARE per func / proc — what a session loads.
+    package func compileParts(schema: Bool, queries: Bool): String {
         this.resolveSchema()
-        var out = this.ddl() + this.storedDdl()
-        for (f in this.program.funs) { out += this.compileFun(f) + "\n" }
+        var out = ""
+        if (schema) { out += this.ddl() }
+        if (queries) {
+            out += this.storedDdl()
+            for (f in this.program.funs) { out += this.compileFun(f) + "\n" }
+        } else {
+            for (f in this.program.funs) { this.compileFun(f) }   // checked, and recorded for the client
+        }
         return out
     }
 }
