@@ -1,0 +1,21 @@
+range
+0
+1
+2
+3
+(4 rows)
+count
+1000
+(1 row)
+words
+keal
+sql
+postgres
+(3 rows)
+sku|price|note
+HAM|15.00|
+SAW|22.00|sharp
+(2 rows)
+sku
+SAW
+(1 row)

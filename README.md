@@ -186,8 +186,8 @@ of several rows with `onConflict`, `insertInto` from a query, `update` /
 connectives with Kleene's tables on `Bool3`, and reference paths as
 implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
-functions and triggers in Keal compiled to `LANGUAGE C`, calling the
-file's queries through SPI with typed results — all of it compiled
+functions (scalar or `SETOF`) and triggers in Keal compiled to
+`LANGUAGE C`, calling the file's queries through SPI with typed results — all of it compiled
 natively as well as run on the VM.
 
 Licensed under Apache-2.0, like Keal.

@@ -1,0 +1,28 @@
+// Set-returning stored functions: a List<T> answered as SETOF.
+
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+    note:  String?
+}
+
+func cheaperThan(max: Decimal): List<Product> {
+    from(Product).where(price < max).orderBy(sku).select(*)
+}
+
+stored pure func range(n: Int): List<Int> {
+    val out: List<Int> = []
+    var i = 0
+    while (i < n) { out.add(i); i += 1 }
+    return out
+}
+
+stored pure func words(s: String): List<String> {
+    return s.split(" ").filter({ it != "" })
+}
+
+// Rows of a table, through the file's own query.
+stored func cheap(max: Float): List<Product> {
+    return cheaperThan("" + max)
+}

@@ -92,10 +92,16 @@ package func plkealSource(compiler: Compiler): String {
     // `posts`), its fields named after the columns. Never a tuple: a tuple
     // holds five at most, and a name beats a position.
     val triggers = program.triggers
-    val hasSpi = not queries.isEmpty() or not triggers.isEmpty()
+    val setofs = program.stored.filter({ compiler.storedSetof(it) })
+    val hasSpi = not queries.isEmpty() or not triggers.isEmpty() or not setofs.isEmpty()
+    val hasOut = not triggers.isEmpty() or not setofs.isEmpty()
     val rowTables: List<String> = []
     for (q in queries) { if (q.rowTable != "" and not rowTables.contains(q.rowTable)) { rowTables.add(q.rowTable) } }
     for (tr in triggers) { unless (rowTables.contains(tr.table)) { rowTables.add(tr.table) } }
+    for (s in setofs) {
+        val elem = compiler.storedElem(s)
+        if (schema.tables.containsKey(elem.name) and not rowTables.contains(elem.name)) { rowTables.add(elem.name) }
+    }
     for (name in rowTables) {
         val t = schema.tables[name]!!
         out += recordDecl(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }))
@@ -126,6 +132,11 @@ package func plkealSource(compiler: Compiler): String {
         else { out += "proc trg_${tr.name}(${params}) {${tr.body}}\n\n" }
     }
 
+    if (hasOut) {
+        out += "extern proc outCell(s: borrow String) = \"plkeal_out\"\n"
+        out += "extern proc outNull() = \"plkeal_out_null\"\n\n"
+    }
+
     // ---- the trigger bridge, as seen from Keal
     if (not triggers.isEmpty()) {
         out += "extern func trgHas(which: Int): Bool = \"plkeal_trg_has\"\n"
@@ -133,9 +144,7 @@ package func plkealSource(compiler: Compiler): String {
         out += "extern func trgStr(which: Int, col: Int): own String = \"plkeal_trg_str\"\n"
         out += "extern func trgInt(which: Int, col: Int): Int = \"plkeal_trg_int\"\n"
         out += "extern func trgFloat(which: Int, col: Int): Float = \"plkeal_trg_float\"\n"
-        out += "extern func trgBool(which: Int, col: Int): Bool = \"plkeal_trg_bool\"\n"
-        out += "extern proc trgOut(s: borrow String) = \"plkeal_trg_out\"\n"
-        out += "extern proc trgOutNull() = \"plkeal_trg_out_null\"\n\n"
+        out += "extern func trgBool(which: Int, col: Int): Bool = \"plkeal_trg_bool\"\n\n"
         val readers: List<String> = []
         for (tr in triggers) {
             unless (readers.contains(tr.table)) {
@@ -186,6 +195,33 @@ package func plkealSource(compiler: Compiler): String {
     for (s in program.stored) {
         val params = s.params.map({ "${it.name}: ${it.ty.render()}" }).join(", ")
         val args = s.params.map({ it.name }).join(", ")
+        if (compiler.storedSetof(s)) {
+            // Many results: pushed as cells, the count answered.
+            val elem = compiler.storedElem(s)
+            val table = schema.tables[elem.name]
+            out += "func plkeal_${s.name}(${params}): Int {\n"
+            out += "    plkealError = null\n"
+            out += "    try {\n"
+            out += "        val xs = ${s.name}(${args})\n"
+            out += "        for (x in xs) {\n"
+            if (table == null) {
+                out += "            outCell(\"\" + x)\n"
+            } else {
+                for (col in table.columns) {
+                    if (col.optional) {
+                        out += "            val v_${col.name} = x.${col.name}\n"
+                        out += "            if (v_${col.name} == null) { outNull() } else { outCell(\"\" + v_${col.name}) }\n"
+                    } else {
+                        out += "            outCell(\"\" + x.${col.name})\n"
+                    }
+                }
+            }
+            out += "        }\n"
+            out += "        return xs.size\n"
+            out += "    } catch (e) { plkealError = e; return 0 }\n"
+            out += "}\n\n"
+            continue
+        }
         out += "func plkeal_${s.name}(${params}): ${s.ret!!.render()} {\n"
         out += "    plkealError = null\n"
         out += "    try { return ${s.name}(${args}) } catch (e) { plkealError = e; return ${zeroOf(s.ret!!)} }\n"
@@ -210,9 +246,9 @@ package func plkealSource(compiler: Compiler): String {
             for (col in t.columns) {
                 if (col.optional) {
                     out += "        val v_${col.name} = out.${col.name}\n"
-                    out += "        if (v_${col.name} == null) { trgOutNull() } else { trgOut(\"\" + v_${col.name}) }\n"
+                    out += "        if (v_${col.name} == null) { outNull() } else { outCell(\"\" + v_${col.name}) }\n"
                 } else {
-                    out += "        trgOut(\"\" + out.${col.name})\n"
+                    out += "        outCell(\"\" + out.${col.name})\n"
                 }
             }
             out += "        return true\n"
@@ -230,6 +266,7 @@ package func plkealSource(compiler: Compiler): String {
     out += " * backend, when PostgreSQL loads the library; idempotent on Keal's side. */\n"
     out += "void _PG_init(void) { keal_runtime_init(); }\n\n"
     if (hasSpi) { out += spiBridge(queries) }
+    if (hasOut) { out += outBridge() }
     if (not triggers.isEmpty()) { out += triggerBridge() }
     out += "/* Raises the panic the guard caught, once every Keal frame has returned. */\n"
     out += "static void plkeal_raise(void) {\n"
@@ -245,6 +282,65 @@ package func plkealSource(compiler: Compiler): String {
         var i = 0
         val args: List<String> = []
         val releases: List<String> = []
+        val setof = compiler.storedSetof(s)
+        if (setof) {
+            // Value-per-call: the first call runs the Keal function and keeps its
+            // cells in the multi-call context; every call hands one result back.
+            val elem = compiler.storedElem(s)
+            val table = schema.tables[elem.name]
+            val ncols = if (table == null) { 1 } else { table.columns.size }
+            out += "    FuncCallContext* fc;\n"
+            out += "    if (SRF_IS_FIRSTCALL()) {\n"
+            out += "        fc = SRF_FIRSTCALL_INIT();\n"
+            out += "        MemoryContext oldctx = MemoryContextSwitchTo(fc->multi_call_memory_ctx);\n"
+            i = 0
+            for (p in s.params) {
+                when (p.ty.name) {
+                    "Int" -> { out += "        int64_t a${i} = PG_GETARG_INT64(${i});\n" }
+                    "Float" -> { out += "        double a${i} = PG_GETARG_FLOAT8(${i});\n" }
+                    "Bool" -> { out += "        bool a${i} = PG_GETARG_BOOL(${i});\n" }
+                    else -> {
+                        out += "        text* t${i} = PG_GETARG_TEXT_PP(${i});\n"
+                        out += "        KealStr* a${i} = keal_str_from_bytes(VARDATA_ANY(t${i}), VARSIZE_ANY_EXHDR(t${i}));\n"
+                        releases.add("        keal_str_release(a${i});\n")
+                    }
+                }
+                args.add("a${i}")
+                i += 1
+            }
+            out += "        if (SPI_connect() != SPI_OK_CONNECT) { elog(ERROR, \"SPI_connect failed\"); }\n"
+            out += "        plkeal_out_reset();\n"
+            out += "        int64_t n = k_plkeal_${s.name}(${args.join(", ")});\n"
+            for (r in releases) { out += r }
+            out += "        plkeal_spi_reset();\n"
+            out += "        SPI_finish();\n"
+            out += "        if (k_plkealFailed()) { plkeal_raise(); }\n"
+            out += "        fc->max_calls = (uint64)n;\n"
+            out += "        fc->user_fctx = plkeal_out_keep(${ncols});\n"
+            if (table != null) {
+                out += "        TupleDesc td = RelationNameGetTupleDesc(\"${snakeName(table.name)}\");\n"
+                out += "        fc->tuple_desc = BlessTupleDesc(td);\n"
+                out += "        fc->attinmeta = TupleDescGetAttInMetadata(td);\n"
+            }
+            out += "        MemoryContextSwitchTo(oldctx);\n"
+            out += "    }\n"
+            out += "    fc = SRF_PERCALL_SETUP();\n"
+            out += "    if (fc->call_cntr >= fc->max_calls) { SRF_RETURN_DONE(fc); }\n"
+            out += "    char** cells = ((char**) fc->user_fctx) + fc->call_cntr * ${ncols};\n"
+            if (table != null) {
+                out += "    HeapTuple tuple = BuildTupleFromCStrings(fc->attinmeta, cells);\n"
+                out += "    SRF_RETURN_NEXT(fc, HeapTupleGetDatum(tuple));\n"
+            } else {
+                when (elem.name) {
+                    "Int" -> { out += "    SRF_RETURN_NEXT(fc, Int64GetDatum(strtoll(cells[0], NULL, 10)));\n" }
+                    "Float" -> { out += "    SRF_RETURN_NEXT(fc, Float8GetDatum(strtod(cells[0], NULL)));\n" }
+                    "Bool" -> { out += "    SRF_RETURN_NEXT(fc, BoolGetDatum(cells[0][0] == 't'));\n" }
+                    else -> { out += "    SRF_RETURN_NEXT(fc, PointerGetDatum(cstring_to_text(cells[0])));\n" }
+                }
+            }
+            out += "}\n\n"
+            continue
+        }
         for (p in s.params) {
             when (p.ty.name) {
                 "Int" -> { out += "    int64_t a${i} = PG_GETARG_INT64(${i});\n" }
@@ -296,7 +392,7 @@ package func plkealSource(compiler: Compiler): String {
         out += "    else if (TRIGGER_FIRED_BY_UPDATE(td->tg_event)) { row = td->tg_newtuple; old = td->tg_trigtuple; }\n"
         out += "    else { old = td->tg_trigtuple; }\n"
         out += "    if (SPI_connect() != SPI_OK_CONNECT) { elog(ERROR, \"SPI_connect failed\"); }\n"
-        out += "    plkeal_trg_load(0, row, desc);\n    plkeal_trg_load(1, old, desc);\n    plkeal_trg_out_reset();\n"
+        out += "    plkeal_trg_load(0, row, desc);\n    plkeal_trg_load(1, old, desc);\n    plkeal_out_reset();\n"
         out += "    bool produced = k_plkeal_trg_${tr.name}();\n"
         out += "    HeapTuple result = row ? row : old;\n"
         out += "    if (!k_plkealFailed() && produced) { result = SPI_copytuple(plkeal_trg_build(desc)); }\n"
@@ -308,6 +404,46 @@ package func plkealSource(compiler: Compiler): String {
     out += "\"\"\"\n\n"
     out += "proc main() {}\n"
     return out
+}
+
+/// The out cells: what a trigger or a set-returning function answers, as
+/// text, one cell at a time.
+func outBridge(): String {
+    return """#include "funcapi.h"
+
+#define PLKEAL_OUT_MAX 65536
+static char** plkeal_out_cells;
+static int plkeal_out_n;
+static int plkeal_out_cap;
+
+static void plkeal_out_reset(void) {
+    for (int k = 0; k < plkeal_out_n; k++) { free(plkeal_out_cells[k]); }
+    plkeal_out_n = 0;
+}
+
+static void plkeal_out_push(char* s) {
+    if (plkeal_out_n >= plkeal_out_cap) {
+        int cap = plkeal_out_cap ? plkeal_out_cap * 2 : 64;
+        plkeal_out_cells = realloc(plkeal_out_cells, sizeof(char*) * (size_t)cap);
+        plkeal_out_cap = cap;
+    }
+    plkeal_out_cells[plkeal_out_n++] = s;
+}
+
+void plkeal_out(const char* s) { plkeal_out_push(strdup(s)); }
+void plkeal_out_null(void) { plkeal_out_push(NULL); }
+
+/* The out cells copied into the current memory context, `ncols` per row;
+ * the static buffer is free to be reused by a nested call. */
+static char** plkeal_out_keep(int ncols) {
+    int rows = ncols ? plkeal_out_n / ncols : 0;
+    char** kept = palloc0(sizeof(char*) * (size_t)(rows * ncols + 1));
+    for (int k = 0; k < rows * ncols; k++) { kept[k] = plkeal_out_cells[k] ? pstrdup(plkeal_out_cells[k]) : NULL; }
+    plkeal_out_reset();
+    return kept;
+}
+
+"""
 }
 
 /// The C half of the trigger bridge: the row and the old row as text cells,
@@ -322,8 +458,6 @@ func triggerBridge(): String {
 static char* plkeal_trg_cells[2][PLKEAL_TRG_MAXCOLS];
 static int plkeal_trg_n[2];
 static bool plkeal_trg_present[2];
-static char* plkeal_trg_out_cells[PLKEAL_TRG_MAXCOLS];
-static int plkeal_trg_out_n;
 
 static void plkeal_trg_load(int which, HeapTuple t, TupleDesc d) {
     for (int k = 0; k < plkeal_trg_n[which]; k++) { free(plkeal_trg_cells[which][k]); plkeal_trg_cells[which][k] = NULL; }
@@ -340,15 +474,10 @@ static void plkeal_trg_load(int which, HeapTuple t, TupleDesc d) {
     plkeal_trg_n[which] = k;
 }
 
-static void plkeal_trg_out_reset(void) {
-    for (int k = 0; k < plkeal_trg_out_n; k++) { free(plkeal_trg_out_cells[k]); plkeal_trg_out_cells[k] = NULL; }
-    plkeal_trg_out_n = 0;
-}
-
 static void plkeal_trg_reset(void) {
     plkeal_trg_load(0, NULL, NULL);
     plkeal_trg_load(1, NULL, NULL);
-    plkeal_trg_out_reset();
+    plkeal_out_reset();
 }
 
 /* The answered row as a tuple: dropped attributes stay null. */
@@ -357,7 +486,7 @@ static HeapTuple plkeal_trg_build(TupleDesc d) {
     int k = 0;
     for (int i = 0; i < d->natts; i++) {
         if (TupleDescAttr(d, i)->attisdropped) { continue; }
-        vals[i] = k < plkeal_trg_out_n ? plkeal_trg_out_cells[k] : NULL;
+        vals[i] = k < plkeal_out_n ? plkeal_out_cells[k] : NULL;
         k++;
     }
     return BuildTupleFromCStrings(TupleDescGetAttInMetadata(d), vals);
@@ -373,8 +502,6 @@ char* plkeal_trg_str(int64_t which, int64_t col) { const char* c = plkeal_trg_ce
 int64_t plkeal_trg_int(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c ? strtoll(c, NULL, 10) : 0; }
 double plkeal_trg_float(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c ? strtod(c, NULL) : 0.0; }
 bool plkeal_trg_bool(int64_t which, int64_t col) { const char* c = plkeal_trg_cell(which, col); return c && c[0] == 't'; }
-void plkeal_trg_out(const char* s) { if (plkeal_trg_out_n < PLKEAL_TRG_MAXCOLS) { plkeal_trg_out_cells[plkeal_trg_out_n++] = strdup(s); } }
-void plkeal_trg_out_null(void) { if (plkeal_trg_out_n < PLKEAL_TRG_MAXCOLS) { plkeal_trg_out_cells[plkeal_trg_out_n++] = NULL; } }
 
 """
 }

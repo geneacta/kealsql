@@ -104,6 +104,14 @@ refuses the write. Columns are matched by position with dropped attributes
 skipped, which holds as long as columns are only ever appended — the
 migration's `ADD COLUMN` does that, and a `renamed` keeps the position.
 
+**Set-returning functions**: a `stored func` whose result is a `List<T>`
+is `RETURNS SETOF T` — a scalar, or a table's rows. The Keal wrapper
+pushes every element (or every column of every row) as a text cell, and
+the entry point follows PostgreSQL's value-per-call protocol: the first
+call runs the function and keeps the cells in the multi-call context,
+each call hands one back. The same out cells carry the row a `before`
+trigger answers.
+
 Cost to state: a subtransaction per query call — what PL/pgSQL pays for an
 exception block, paid here on every call. The alternative, an error that
 `longjmp`s through Keal, is the thing the rule forbids.

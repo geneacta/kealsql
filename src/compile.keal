@@ -220,8 +220,21 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         if (this.schema.tables.containsKey(s.name) or this.schema.isEnum(s.name)) { this.fail(s.line, s.col, "`${s.name}` is already a table or an enum") }
         if (this.program.funs.any({ it.name == s.name })) { this.fail(s.line, s.col, "`${s.name}` is already a query") }
         for (p in s.params) { this.storedType(p.ty, "parameter `${p.name}`") }
-        this.storedType(s.ret!!, "the result")
+        val ret = s.ret!!
+        if (ret.name == "List") {
+            // SETOF: many scalars, or many rows of a table.
+            if (ret.optional) { this.fail(ret.line, ret.col, "a stored function answers a `List<T>` or nothing; not an optional list") }
+            val elem = ret.args[0]
+            if (elem.optional) { this.fail(elem.line, elem.col, "the elements a stored function answers are not optional") }
+            unless (this.schema.tables.containsKey(elem.name)) { this.storedType(elem, "the result") }
+        } else {
+            this.storedType(ret, "the result")
+        }
     }
+
+    /// The result of a stored function is many when its type is a `List`.
+    package func storedSetof(s: StoredN): Bool { s.ret!!.name == "List" }
+    package func storedElem(s: StoredN): TypeN { if (this.storedSetof(s)) { s.ret!!.args[0] } else { s.ret!! } }
 
     proc storedType(t: TypeN, what: String) {
         val ok = when (t.name) {
@@ -245,7 +258,11 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     /// A stored function's arguments as pg_get_function_arguments prints them.
     package func storedArgs(s: StoredN): String { s.params.map({ this.storedSqlType(it.ty) }).join(", ") }
-    package func storedResult(s: StoredN): String { this.storedSqlType(s.ret!!) }
+    package func storedResult(s: StoredN): String {
+        val elem = this.storedElem(s)
+        val one = if (this.schema.tables.containsKey(elem.name)) { sqlName(elem.name) } else { this.storedSqlType(elem) }
+        return if (this.storedSetof(s)) { "SETOF " + one } else { one }
+    }
 
     package func storedFunctionDdl(s: StoredN): String {
         val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }

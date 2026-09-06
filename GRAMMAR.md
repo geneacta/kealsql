@@ -284,7 +284,8 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 ### Stored functions
 
 ```
-StoredDecl    = "stored" "pure"? "func" Ident "(" Params? ")" ":" ScalarType KealBody ;
+StoredDecl    = "stored" "pure"? "func" Ident "(" Params? ")" ":" StoredResult KealBody ;
+StoredResult  = ScalarType | "List" "<" ( ScalarType | Ident ) ">" ;   (* many: SETOF a scalar, or SETOF a table's rows *)
 KealBody      = "{" ... "}" ;                              (* Keal, verbatim, to the matching brace *)
 ```
 
@@ -298,6 +299,11 @@ update or a delete (the one it replaces). A `before insert` or `before
 update` body *answers* the row to store — `row`, or `row.with(col = …)` —
 and a `throw` refuses the write with its message as the SQL error; the
 other bodies answer nothing. Every body may run the file's queries.
+
+A result `List<Int>` (or `List<String>`, …) is `RETURNS SETOF`: the
+function is called in a `FROM`, one row per element. `List<Table>` answers
+the table's rows — a Keal `List<Product>`, as the file's own queries
+already produce them — as `SETOF product`, usable like the table.
 
 The signature is KealSql's — `Int`, `Float`, `Bool` or `String`, none
 optional, no `String(n)` — and the body is Keal's: the parser finds the
