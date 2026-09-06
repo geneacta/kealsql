@@ -158,6 +158,11 @@ stored func totalScore(name: String): Int {
 }
 ```
 
+On Windows (Git Bash), the compiler, the SQL and `--migrate` work — the
+suite runs its private PostgreSQL over TCP there — but the stored
+functions and the client are not built yet: an extension is a `.dll`
+linking `postgres.lib`, and `build.sh` does not know that shape.
+
 When PostgreSQL's `initdb` is on the machine, the suite also starts a
 private server in a temporary directory — no root, no configuration — loads
 every case's SQL into a fresh database, runs the `*.exec.sql` beside it in
