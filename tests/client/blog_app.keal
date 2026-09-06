@@ -4,6 +4,14 @@
 
 import "./blog.client.keal"
 
+// A database made from the code: missing, then empty, then there.
+val made = createBlog("", "client_blog_made")
+println("made: ${made.drafts()} draft(s) in a new database")
+made.close()
+val again = createBlog("", "client_blog_made")            // already there: nothing to do
+println("again: ${again.drafts()} draft(s)")
+again.close()
+
 val db = connectBlog("")                                  // PG* in the environment says where
 
 proc show(label: String, posts: List<ByAuthorRow>) {

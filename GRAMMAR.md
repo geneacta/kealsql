@@ -515,6 +515,10 @@ the same Keal types a stored function gets through SPI — rows as records,
 message when it fails — plus `begin()`, `commit()`, `rollback()`, `close()`.
 Every statement is prepared once per connection, on first use. Build the
 program with `keal build app.keal -I$(pg_config --includedir) -lpq`.
+`create<Stem>(conninfo, dbname)` makes the database when it is missing and
+its schema when the database holds none of the file's tables — the whole
+DDL, embedded in the module — and answers the connection; stored
+functions and triggers, which need their library, are not created there.
 
 `--migrate` reads the database through `psql` — `--db` is its `-d`; without
 it the `PG*` environment and `~/.pgpass` decide — and prints `ALTER`,

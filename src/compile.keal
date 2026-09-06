@@ -443,7 +443,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         done.add(name)
     }
 
-    func ddl(): String {
+    package func ddl(): String {
         var out = ""
         if (this.schema.name != "") { out += "CREATE SCHEMA IF NOT EXISTS ${quoteIf(snakeName(this.schema.name))};\n\n" }
         for (e in this.program.enums) {

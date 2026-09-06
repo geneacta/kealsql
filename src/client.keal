@@ -23,6 +23,21 @@ import "./plkeal.keal"
 
 func upperFirst(s: String): String { s.take(1).toUpper() + s.drop(1) }
 
+/// A Keal string literal holding `s`.
+func kealLiteral(s: String): String {
+    var out = "\""
+    for (c in s) {
+        out += when (c) {
+            "\\" -> "\\\\"
+            "\"" -> "\\\""
+            "\n" -> "\\n"
+            "$" -> "\\$"
+            else -> c
+        }
+    }
+    return out + "\""
+}
+
 package func clientSource(compiler: Compiler): String {
     val program = compiler.program
     val schema = compiler.schema
@@ -69,6 +84,32 @@ package func clientSource(compiler: Compiler): String {
     out += "    val h = kcConnect(conninfo)\n"
     out += "    if (h < 0) { throw \"connect: \" + kcMessage() }\n"
     out += "    return ${stem}Db(h)\n"
+    out += "}\n\n"
+    // ---- the database itself, made from the code when it is missing
+    val first = compiler.tableOrder().first()
+    out += "/// The database named, made if it is missing — then its schema, if it holds none of\n"
+    out += "/// these tables. Stored functions and triggers need their library and are not created here.\n"
+    out += "/// `conninfo` says where and as whom, without a database: \"host=... user=...\", or \"\".\n"
+    out += "public func create${stem}(conninfo: String, dbname: String): ${stem}Db {\n"
+    out += "    val admin = kcConnect(conninfo + \" dbname=postgres\")\n"
+    out += "    if (admin < 0) { throw \"create${stem}: \" + kcMessage() }\n"
+    out += "    kcExec(admin, \"SELECT 1 FROM pg_database WHERE datname = '\" + dbname.replace(\"'\", \"''\") + \"'\")\n"
+    out += "    kcCheck(\"create${stem}\")\n"
+    out += "    if (kcRows() == 0) {\n"
+    out += "        kcExec(admin, \"CREATE DATABASE \\\"\" + dbname.replace(\"\\\"\", \"\\\"\\\"\") + \"\\\"\")\n"
+    out += "        kcCheck(\"create${stem}\")\n"
+    out += "    }\n"
+    out += "    kcClose(admin)\n"
+    out += "    val db = connect${stem}(conninfo + \" dbname=\" + dbname)\n"
+    if (first != null) {
+        out += "    kcExec(db.handle, \"SELECT to_regclass('${qualName(schema, first).replace("\"", "\\\"")}')\")\n"
+        out += "    kcCheck(\"create${stem}\")\n"
+        out += "    if (kcIsNull(0, 0)) {\n"
+        out += "        kcExec(db.handle, ${kealLiteral(compiler.ddl())})\n"
+        out += "        kcCheck(\"create${stem}\")\n"
+        out += "    }\n"
+    }
+    out += "    return db\n"
     out += "}\n\n"
     out += "public class ${stem}Db(val handle: Int) {\n"
     out += "    public proc close() { kcClose(this.handle) }\n"

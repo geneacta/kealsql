@@ -102,11 +102,13 @@ builds against it:
 ```
 import "./blog.client.keal"
 
-val db = connectBlog("dbname=blog")
+val db = createBlog("", "blog")          // the database and its schema, made if missing
 for (p in db.byAuthor("ada")) { println("#${p.id} ${p.title}") }
 val editor = db.editorOf(1)              // String?
 db.close()
 ```
+
+`connectBlog(conninfo)` opens an existing one.
 
 `--migrate` reads the database through `psql` (`--db` is its `-d`; the
 `PG*` environment and `~/.pgpass` work as for `psql`) and prints the
