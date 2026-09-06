@@ -34,6 +34,9 @@ a { text-decoration: none; color: inherit; }
          border: 1px solid rgba(140,220,196,.2); border-radius: 6px; padding: 5px 10px; }
 .btn-gh { font: 600 13px Sora, sans-serif; color: var(--bg); background: var(--mint);
           border-radius: 8px; padding: 8px 16px; }
+.btn-keal { font: 600 13px Sora, sans-serif; color: var(--ink);
+            border: 1px solid var(--line2); border-radius: 8px; padding: 7px 14px; }
+.btn-keal:hover { border-color: var(--accent); color: var(--accent-h); }
 .btn-gh:hover { filter: brightness(1.06); }
 
 /* ---- buttons ---- */

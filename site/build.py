@@ -165,11 +165,11 @@ def markdown(text):
 
 # ---- page chrome ---------------------------------------------------------
 
+# The way back to Keal's own site is the `btn-keal` badge on the right, as
+# keal-view has it, so the tabs are this site's pages only.
 NAV = {
-    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("docs.html", "Docs"),
-           ("https://geneacta.github.io/keal/", "Keal")],
-    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("docs.html", "Docs"),
-           ("https://geneacta.github.io/keal/fr/", "Keal")],
+    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("docs.html", "Docs")],
+    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("docs.html", "Docs")],
 }
 
 FOOTER = {
@@ -238,6 +238,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
   <div class="nav-right">
     <span class="badge">%(version)s</span>
     <a class="btn-lang" href="%(other)s">%(other_label)s</a>
+    <a class="btn-keal" href="%(keal)s">Keal</a>
     <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
   </div>
 </nav>
@@ -260,6 +261,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
         "alt_en": BASE_URL + filename, "alt_fr": BASE_URL + "fr/" + filename,
         "locale": "en_GB" if lang == "en" else "fr_FR", "image": BASE_URL + "assets/kealsql.png",
         "links": "".join(nav_links), "version": VERSION, "other": other, "other_label": SWITCH[lang],
+        "keal": "https://geneacta.github.io/keal/" + ("" if lang == "en" else "fr/"),
         "body": layout, "foot0": foot[0], "foot1": foot[1], "foot2": foot[2], "foot3": foot[3],
     }
 
