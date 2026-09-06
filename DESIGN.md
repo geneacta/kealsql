@@ -444,6 +444,18 @@ Mappings:
 | `T?` column                       | nullable column                       |
 | `enum`                            | `CREATE TYPE … AS ENUM`               |
 
+### The client
+
+The other end of the same bridge: `--client` writes a Keal module in which
+every `func` / `proc` of the file is a method on a connection, with the
+types a stored function gets through SPI — the generator is the same, on
+libpq instead of SPI. Statements are prepared once per connection on first
+use, parameters travel as text and cells come back as text, an error is a
+Keal exception with the query's name. It is what makes the `PREPARE`
+output more than a `psql` convenience: the application never writes SQL,
+and a column the schema does not have is a compile error in the
+application too, because the record it reads is generated from the schema.
+
 ### The escape hatch
 
 No language covers the long tail of PostgreSQL, and one that tried would

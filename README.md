@@ -81,7 +81,21 @@ keal src/main.keal --migrate file.kealsql --db mydb      # the migration from a 
 keal src/main.keal --migrate file.kealsql --db mydb --destructive
 keal src/main.keal --plkeal build/ file.kealsql          # the stored functions as a Keal program + build.sh
 keal src/main.keal --lib build/file.so file.kealsql      # the SQL, CREATE FUNCTION naming that library
+keal src/main.keal --client app/ file.kealsql            # the queries as a Keal module over libpq
 tests/run.sh                                              # the suite: every case, byte for byte
+```
+
+From a program, the same queries are methods on a connection — `--client`
+writes the module, `keal build app.keal -I$(pg_config --includedir) -lpq`
+builds against it:
+
+```
+import "./blog.client.keal"
+
+val db = connectBlog("dbname=blog")
+for (p in db.byAuthor("ada")) { println("#${p.id} ${p.title}") }
+val editor = db.editorOf(1)              // String?
+db.close()
 ```
 
 `--migrate` reads the database through `psql` (`--db` is its `-d`; the
@@ -162,6 +176,7 @@ Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
 | `src/catalog.keal` | the live schema, read from `pg_catalog` through `psql` |
 | `src/migrate.keal` | the diff: declared against live, as statements to review |
 | `src/plkeal.keal` | the stored functions as a Keal program with PostgreSQL entry points, and its build script |
+| `src/client.keal` | the queries as a Keal module over libpq: one typed method per query on a connection |
 | `src/main.keal` | the command |
 | `tests/cases/*.kealsql` | each compiles to exactly its `.sql` |
 | `tests/errors/*.kealsql` | each fails with exactly its `.err` |
@@ -169,6 +184,7 @@ Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
 | `tests/migrations/*/` | `before.kealsql` → `after.kealsql` must print `expected.sql`, apply, then settle to `settled.sql` |
 | `tests/plkeal/*.kealsql` | compiled to `.sql`; the library is built, loaded, and `.exec.sql` must print `.exec.out` |
 | `examples/*.kealsql` | real files, held to the same checks as `tests/cases/` |
+| `tests/client/*_app.keal` | a program over a case's generated client, built with libpq and run; its output must be `.out` |
 
 ## Status
 
@@ -188,6 +204,7 @@ implicit joins; the migration diff against a live database, with
 renames declared and destructive steps held back; and `plkeal`, stored
 functions (scalar or `SETOF`) and triggers in Keal compiled to
 `LANGUAGE C`, calling the file's queries through SPI with typed results — all of it compiled
-natively as well as run on the VM.
+natively as well as run on the VM; and the client, the same queries as
+typed methods on a libpq connection from a Keal program.
 
 Licensed under Apache-2.0, like Keal.

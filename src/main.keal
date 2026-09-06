@@ -6,6 +6,7 @@
 //   keal src/main.keal --plkeal DIR file.kealsql            the stored functions as a Keal program and a
 //                                                          build script for the PostgreSQL shared library
 //   keal src/main.keal --lib PATH file.kealsql             the SQL, with CREATE FUNCTION naming that library
+//   keal src/main.keal --client DIR file.kealsql            the queries as a Keal module over libpq
 //
 // `--migrate` reads the database through `psql`; `--db` is psql's `-d`, and
 // without it the PG* environment and ~/.pgpass decide, as for psql itself.
@@ -17,12 +18,14 @@ import "./parser.keal"
 import "./compile.keal"
 import "./migrate.keal"
 import "./plkeal.keal"
+import "./client.keal"
 
 func usage(): Nothing {
     println("usage: kealsql <file.kealsql>")
     println("       kealsql --migrate <file.kealsql> [--db NAME] [--destructive]")
     println("       kealsql --plkeal DIR <file.kealsql>")
     println("       kealsql --lib PATH <file.kealsql>")
+    println("       kealsql --client DIR <file.kealsql>")
     exit(2)
 }
 
@@ -31,6 +34,7 @@ var migrate = false
 var destructive = false
 var db = ""
 var plkealDir = ""
+var clientDir = ""
 var lib = ""
 val argv = args()
 var i = 0
@@ -48,6 +52,11 @@ while (i < argv.size) {
             i += 1
             if (i >= argv.size) { usage() }
             plkealDir = argv[i]
+        }
+        "--client" -> {
+            i += 1
+            if (i >= argv.size) { usage() }
+            clientDir = argv[i]
         }
         "--lib" -> {
             i += 1
@@ -72,7 +81,10 @@ if (source == null) {
 val program = parseFile(path, source)
 val compiler = Compiler(path, program)
 compiler.lib = lib
-if (plkealDir != "") {
+if (clientDir != "") {
+    compiler.compile()
+    println(writeClient(compiler, clientDir))
+} else if (plkealDir != "") {
     compiler.compile()                       // checks everything and records the queries
     for (w in writePlkeal(compiler, plkealDir)) { println(w) }
 } else if (migrate) {

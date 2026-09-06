@@ -1,0 +1,34 @@
+// An application over tests/cases/blog.kealsql, through the generated client.
+// The suite builds it with libpq, runs it against a fresh database holding
+// blog.sql, and holds its output to blog_app.out.
+
+import "./blog.client.keal"
+
+val db = connectBlog("")                                  // PG* in the environment says where
+
+proc show(label: String, posts: List<ByAuthorRow>) {
+    println("${label}: ${posts.size} post(s)")
+    for (p in posts) { println("  #${p.id} ${p.title}") }
+}
+
+db.begin()
+show("ada before", db.byAuthor("ada"))
+println("drafts: ${db.drafts()}")
+val published = db.publish(2)
+println("published: ${published.title} (${published.status})")
+println("drafts now: ${db.drafts()}")
+show("ada after", db.byAuthor("ada"))
+val editor = db.editorOf(1)
+println("editor of #1: ${editor ?: "none"}")
+println("editor of #2: ${db.editorOf(2) ?: "none"}")
+db.rollback()
+println("drafts after rollback: ${db.drafts()}")
+try {
+    db.publish(999)
+    println("unreachable")
+} catch (e) {
+    println("caught: ${e}")
+}
+db.forget(2)
+println("posts left: ${db.drafts() + db.byAuthor("ada").size}")
+db.close()

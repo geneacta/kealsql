@@ -1,0 +1,13 @@
+ada before: 1 post(s)
+  #1 Hello
+drafts: 1
+published: Draft one (Published)
+drafts now: 0
+ada after: 2 post(s)
+  #2 Draft one
+  #1 Hello
+editor of #1: bob
+editor of #2: none
+drafts after rollback: 1
+caught: publish: expected one row, got 0
+posts left: 2

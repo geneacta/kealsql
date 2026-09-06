@@ -504,7 +504,17 @@ kealsql --migrate file.kealsql [--db NAME] [--destructive]
 
 kealsql --plkeal DIR file.kealsql                      the stored functions as DIR/<stem>.keal and DIR/build.sh
 kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCTIONs naming that library
+kealsql --client DIR file.kealsql                      the queries as DIR/<stem>.client.keal, a module over libpq
 ```
+
+`--client` writes a Keal module an application imports: `connect<Stem>(conninfo)`
+opens a libpq connection (`""` leaves it to the `PG*` environment), and the
+`<Stem>Db` it answers has one method per `func` / `proc` of the file, with
+the same Keal types a stored function gets through SPI — rows as records,
+`T?` for `first()`, an exception carrying the query's name and the server's
+message when it fails — plus `begin()`, `commit()`, `rollback()`, `close()`.
+Every statement is prepared once per connection, on first use. Build the
+program with `keal build app.keal -I$(pg_config --includedir) -lpq`.
 
 `--migrate` reads the database through `psql` — `--db` is its `-d`; without
 it the `PG*` environment and `~/.pgpass` decide — and prints `ALTER`,

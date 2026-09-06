@@ -45,7 +45,7 @@ func zeroOf(t: TypeN): String {
 
 /// The Keal type a query's value has. Dates, times, uuids, enums and bytes
 /// are their SQL text.
-func kealType(ty: Ty): String {
+package func kealType(ty: Ty): String {
     val base = when (ty.name) {
         "Int", "BigInt" -> "Int"
         "Float" -> "Float"
@@ -56,14 +56,17 @@ func kealType(ty: Ty): String {
 }
 
 /// The expression that reads cell `col` of row `i` as a Keal value.
-func cellExpr(ty: Ty, col: Int): String {
+func cellExpr(ty: Ty, col: Int): String { cellExprOn("spi", ty, col) }
+
+/// The same, on a named bridge: `spi` inside PostgreSQL, `kc` in a client.
+package func cellExprOn(b: String, ty: Ty, col: Int): String {
     val get = when (ty.name) {
-        "Int", "BigInt" -> "spiInt(i, ${col})"
-        "Float" -> "spiFloat(i, ${col})"
-        "Bool", "Bool3" -> "spiBool(i, ${col})"
-        else -> "spiStr(i, ${col})"
+        "Int", "BigInt" -> "${b}Int(i, ${col})"
+        "Float" -> "${b}Float(i, ${col})"
+        "Bool", "Bool3" -> "${b}Bool(i, ${col})"
+        else -> "${b}Str(i, ${col})"
     }
-    if (ty.optional) { return "if (spiIsNull(i, ${col})) { null } else { ${get} }" }
+    if (ty.optional) { return "if (${b}IsNull(i, ${col})) { null } else { ${get} }" }
     return get
 }
 
@@ -177,6 +180,7 @@ package func plkealSource(compiler: Compiler): String {
         out += "extern func spiFloat(row: Int, col: Int): Float = \"plkeal_spi_float\"\n"
         out += "extern func spiBool(row: Int, col: Int): Bool = \"plkeal_spi_bool\"\n\n"
         out += "/// A query that failed is a Keal exception: catch it, or let the entry point raise it.\n"
+        out += "extern proc spiExec(sql: borrow String) = \"plkeal_spi_exec\"\n"
         out += "proc spiCheck(what: String) { if (spiFailed()) { throw what + \": \" + spiMessage() } }\n\n"
         var slot = 0
         for (q in queries) {
@@ -522,8 +526,13 @@ func recordDecl(name: String, fields: List<String>, types: List<String>): String
 }
 
 /// The Keal function a stored function calls to run one of the file's queries.
-func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
+func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String { queryWrapperOn("spi", "", q, slot, schema) }
+
+/// `b` names the bridge; `handle` is the connection expression a client
+/// passes to it ("" inside PostgreSQL, where there is one connection).
+package func queryWrapperOn(b: String, handle: String, q: QueryInfo, slot: Int, schema: Schema): String {
     val params = q.params.map({ "${it.name}: ${kealType(it.ty)}" }).join(", ")
+    val run = if (handle == "") { "${b}Run(${slot})" } else { "${b}Run(${handle}, ${slot})" }
     val one = when (q.kind) {
         "count" -> "Int"
         "exists" -> "Bool"
@@ -541,15 +550,21 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
         else -> one
     }
     var out = if (q.kind == "none") { "proc ${q.name}(${params}) {\n" } else { "func ${q.name}(${params}): ${ret} {\n" }
+    if (q.utility) {
+        // A statement PREPARE refuses: run as it is.
+        out += "    ${b}Exec(${if (handle == "") { "" } else { handle + ", " }}\"${q.sql.replace("\"", "\\\"")}\")\n"
+        out += "    ${b}Check(\"${q.name}\")\n}\n\n"
+        return out
+    }
     for (p in q.params) {
         if (p.ty.optional) {
-            out += "    if (${p.name} == null) { spiArgNull() } else { spiArgString(\"\" + ${p.name}) }\n"
+            out += "    if (${p.name} == null) { ${b}ArgNull() } else { ${b}ArgString(\"\" + ${p.name}) }\n"
         } else {
-            out += "    spiArgString(\"\" + ${p.name})\n"
+            out += "    ${b}ArgString(\"\" + ${p.name})\n"
         }
     }
-    out += "    spiRun(${slot})\n"
-    out += "    spiCheck(\"${q.name}\")\n"
+    out += "    ${run}\n"
+    out += "    ${b}Check(\"${q.name}\")\n"
     // how one row is read
     var build = ""
     var decl = ""
@@ -558,20 +573,20 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
         var c = 0
         val names: List<String> = []
         for (col in t.columns) {
-            decl += "        val c${c}: ${kealType(col.ty())} = ${cellExpr(col.ty(), c)}\n"
+            decl += "        val c${c}: ${kealType(col.ty())} = ${cellExprOn(b, col.ty(), c)}\n"
             names.add("c${c}")
             c += 1
         }
         build = "${q.rowTable}(${names.join(", ")})"
     } else if (q.kind == "count") {
-        build = "spiInt(i, 0)"
+        build = "${b}Int(i, 0)"
     } else if (q.kind == "exists") {
-        build = "spiBool(i, 0)"
+        build = "${b}Bool(i, 0)"
     } else if (q.kind != "none") {
         var c = 0
         val names: List<String> = []
         for (ty in q.colTys) {
-            decl += "        val c${c}: ${kealType(ty)} = ${cellExpr(ty, c)}\n"
+            decl += "        val c${c}: ${kealType(ty)} = ${cellExprOn(b, ty, c)}\n"
             names.add("c${c}")
             c += 1
         }
@@ -582,7 +597,7 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
         "list" -> {
             out += "    val out: List<${one}> = []\n"
             out += "    var i = 0\n"
-            out += "    while (i < spiRows()) {\n"
+            out += "    while (i < ${b}Rows()) {\n"
             out += decl
             out += "        out.add(${build})\n"
             out += "        i += 1\n"
@@ -590,14 +605,14 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String {
             out += "    return out\n"
         }
         "first" -> {
-            out += "    if (spiRows() == 0) { return null }\n"
+            out += "    if (${b}Rows() == 0) { return null }\n"
             out += "    val i = 0\n"
             out += decl
             out += "    return ${build}\n"
         }
         else -> {
             // single, row, count, exists: exactly one row
-            out += "    if (spiRows() != 1) { throw \"${q.name}: expected one row, got \" + spiRows() }\n"
+            out += "    if (${b}Rows() != 1) { throw \"${q.name}: expected one row, got \" + ${b}Rows() }\n"
             out += "    val i = 0\n"
             out += decl
             out += "    return ${build}\n"
@@ -677,6 +692,38 @@ char* plkeal_spi_str(int64_t row, int64_t col) { const char* c = plkeal_cell(row
 int64_t plkeal_spi_int(int64_t row, int64_t col) { const char* c = plkeal_cell(row, col); return c ? strtoll(c, NULL, 10) : 0; }
 double plkeal_spi_float(int64_t row, int64_t col) { const char* c = plkeal_cell(row, col); return c ? strtod(c, NULL) : 0.0; }
 bool plkeal_spi_bool(int64_t row, int64_t col) { const char* c = plkeal_cell(row, col); return c && c[0] == 't'; }
+
+/* A statement as it is, outside the plans: REFRESH MATERIALIZED VIEW and the like. */
+void plkeal_spi_exec(const char* sql) {
+    plkeal_free_result();
+    free(plkeal_err); plkeal_err = NULL;
+    MemoryContext oldctx = CurrentMemoryContext;
+    ResourceOwner oldowner = CurrentResourceOwner;
+    BeginInternalSubTransaction(NULL);
+    MemoryContextSwitchTo(oldctx);
+    PG_TRY();
+    {
+        int rc = SPI_execute(sql, false, 0);
+        if (rc < 0) { elog(ERROR, "SPI_execute: %s", SPI_result_code_string(rc)); }
+        plkeal_nrows = (int64_t)SPI_processed; plkeal_ncols = 0;
+        if (SPI_tuptable != NULL) { SPI_freetuptable(SPI_tuptable); }
+        ReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldctx);
+        CurrentResourceOwner = oldowner;
+    }
+    PG_CATCH();
+    {
+        MemoryContextSwitchTo(oldctx);
+        ErrorData* edata = CopyErrorData();
+        FlushErrorState();
+        RollbackAndReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldctx);
+        CurrentResourceOwner = oldowner;
+        plkeal_err = strdup(edata->message ? edata->message : "error");
+        FreeErrorData(edata);
+    }
+    PG_END_TRY();
+}
 
 void plkeal_spi_run(int64_t slot) {
     plkeal_free_result();

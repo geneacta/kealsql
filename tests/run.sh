@@ -109,6 +109,33 @@ for f in tests/plkeal/*.kealsql; do
     fi
 done
 
+# ---- the client: tests/client/NAME_app.keal over tests/cases/NAME.kealsql
+# The client module is generated, the app built with libpq against it and
+# run on a fresh database holding NAME.sql and NAME_seed.sql; its output
+# must be exactly NAME_app.out.
+PGLIBINC=$("$PGBIN/pg_config" --includedir 2>/dev/null)
+for app in tests/client/*_app.keal; do
+    [ -f "$app" ] || continue
+    name=$(basename "${app%_app.keal}")
+    if [ ! -f "$PGLIBINC/libpq-fe.h" ]; then echo "skip $app: libpq headers missing"; continue; fi
+    dir="$PGDIR/client/$name"; mkdir -p "$dir"
+    "$KEAL" src/main.keal --client "$dir" "tests/cases/$name.kealsql" > /dev/null || { echo "FAIL $app: --client"; failed=1; continue; }
+    cp "$app" "$dir/"
+    if ! "$KEAL" build "$dir/$(basename "$app")" -I"$PGLIBINC" -lpq -o "$dir/app" > "$dir/build.log" 2>&1; then
+        echo "FAIL $app: does not build"; grep -E "error" "$dir/build.log" | head -5; failed=1; continue
+    fi
+    $PSQL -d postgres -c "CREATE DATABASE client_$name" > /dev/null
+    $PSQL -d "client_$name" -f "tests/cases/$name.sql" > /dev/null 2>&1
+    [ -f "tests/client/${name}_seed.sql" ] && $PSQL -d "client_$name" -f "tests/client/${name}_seed.sql" > /dev/null 2>&1
+    out=$(PGDATABASE="client_$name" "$dir/app" 2>&1); code=$?
+    exp="tests/client/${name}_app.out"
+    if [ "$code" != 0 ]; then echo "FAIL $app: exit $code"; echo "$out" | head -10; failed=1; continue; fi
+    if [ -n "$UPDATE" ]; then printf '%s\n' "$out" > "$exp"; fi
+    if printf '%s\n' "$out" | diff -u "$exp" - > /dev/null 2>&1; then echo "ok   $app builds against libpq and matches"
+    else echo "FAIL $exp"; printf '%s\n' "$out" | diff -u "$exp" - | head -20; failed=1
+    fi
+done
+
 # ---- migrations: tests/migrations/NAME/{before,after}.kealsql
 # The database is built from before.kealsql; `--migrate after.kealsql` must
 # print exactly expected.sql (destructive statements held back), the
