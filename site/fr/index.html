@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KealSql — la forme de Keal sur PostgreSQL</title>
+<meta name="description" content="Un langage à la forme de Keal sur un PostgreSQL non modifié : schéma et requêtes vérifiés ensemble, compilés à l&#x27;avance en SQL, migrations par diff, et du Keal qui tourne dans le serveur.">
+<link rel="canonical" href="https://geneacta.github.io/kealsql/fr/index.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealsql/index.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealsql/fr/index.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealsql/index.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KealSql">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="KealSql — la forme de Keal sur PostgreSQL">
+<meta property="og:description" content="Un langage à la forme de Keal sur un PostgreSQL non modifié : schéma et requêtes vérifiés ensemble, compilés à l&#x27;avance en SQL, migrations par diff, et du Keal qui tourne dans le serveur.">
+<meta property="og:url" content="https://geneacta.github.io/kealsql/fr/index.html">
+<meta property="og:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KealSql — la forme de Keal sur PostgreSQL">
+<meta name="twitter:description" content="Un langage à la forme de Keal sur un PostgreSQL non modifié : schéma et requêtes vérifiés ensemble, compilés à l&#x27;avance en SQL, migrations par diff, et du Keal qui tourne dans le serveur.">
+<meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <div class="nav-links"><a href="index.html" class="tab-active">Accueil</a><a href="start.html">Premiers pas</a><a href="docs.html">Docs</a><a href="https://geneacta.github.io/keal/fr/">Keal</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-lang" href="../index.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="pill">Pas un fork — du SQL ordinaire pour le PostgreSQL que vous avez déjà</div>
+  <h1>La forme de Keal sur PostgreSQL.</h1>
+  <p class="lede">Un schéma et ses requêtes dans un même fichier, dans la syntaxe de Keal, vérifiés l'un contre l'autre : une colonne que le schéma n'a pas, ou un null là où il l'interdit, est une erreur de compilation. La sortie est du SQL qu'un PostgreSQL non modifié exécute.</p>
+  <div class="cta">
+    <a class="btn-primary" href="start.html">Créer une base →</a>
+    <a class="btn-ghost" href="docs.html">Lire les docs</a>
+  </div>
+  <div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span><span class="run">▶ ce que editorOf devient</span></div><pre>table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    bio:     String?
+}
+
+table Post {
+    id:       Id
+    cascade author: RefId&lt;User&gt;
+    editor:   RefId&lt;User&gt;?
+    title:    String
+    status:   Status
+    created:  Timestamp
+}
+
+func byAuthor(name: String): List&lt;(Int, String)&gt; {
+    from(Post as p)
+        .where(p.author.name == name)
+        .where(status == Published)
+        .orderBy(created.desc)
+        .select(p.id, p.title)
+}
+
+func editorOf(post: Int): String? {
+    from(Post).where(id == post).select(editor?.name).first()
+}</pre><div class="cwin-out"><pre>-- func editorOf(post: Int): String?
+PREPARE editor_of(integer) AS
+SELECT editor.name
+FROM post
+LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
+WHERE post.id = $1
+LIMIT 1;</pre></div></div>
+</section>
+<section class="cards"><div class="card"><h3>La null-safety contre le schéma</h3><p><code>String</code> est <code>NOT NULL</code>, <code>String?</code> est nullable, et <code>?.</code> à travers une référence est un <code>LEFT JOIN</code>. Le type du résultat dit quelle jointure a eu lieu.</p></div><div class="card"><h3>La logique ternaire, rendue visible</h3><p><code>Bool3</code> n'apparaît que si un opérande est nullable. Le compilateur dit où un <code>==</code> peut valoir <em>unknown</em> — et <code>===</code> traite null comme une valeur.</p></div><div class="card"><h3>Des migrations par diff</h3><p>Le fichier est le schéma. <code>--migrate</code> lit le catalogue et imprime ce qui amène la base au fichier ; les étapes destructives sont retenues jusqu'à ce que vous le disiez.</p></div><div class="card"><h3>Du Keal dans le serveur</h3><p>Les corps de <code>stored func</code> et de <code>trigger</code> sont du Keal, compilé via C en fonctions <code>LANGUAGE C</code> — les plus rapides que PostgreSQL connaisse — qui appellent les requêtes du fichier, typées.</p></div><div class="card"><h3>Les mêmes requêtes depuis un programme</h3><p><code>--client</code> écrit un module Keal : une méthode typée par requête sur une connexion libpq. L'application n'écrit jamais de SQL.</p></div></section>
+<section class="band">
+  <h2>Un fichier, trois endroits où l'exécuter.</h2>
+  <p class="lede">Le SQL compilé se charge dans <code>psql</code> comme instructions préparées. Le client en fait des méthodes dans un programme Keal. Et une fonction stockée les appelle depuis l'intérieur du serveur, via SPI, avec les mêmes types aux trois endroits.</p>
+  <div class="chips"><span>psql</span><span>un programme Keal</span><span>dans PostgreSQL</span></div>
+</section>
+<section class="band">
+  <h2>Un transpileur, délibérément.</h2>
+  <p class="lede">La performance d'une requête est une propriété du SQL émis et du planificateur de PostgreSQL, pas du front-end. Le SQL est construit à la compilation, donc chaque requête est une instruction préparée constante — exactement ce qu'une main soigneuse écrirait — et tout l'écosystème, de <code>pg_dump</code> à l'hébergement managé, continue de marcher.</p>
+</section>
+<section class="band">
+  <h2>En route en une minute.</h2>
+  <div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>git clone https://github.com/geneacta/kealsql
+cd kealsql
+keal fetch
+tests/run.sh
+keal src/main.keal blog.kealsql &gt; blog.sql
+createdb blog
+psql -d blog -f blog.sql</pre></div>
+  <p class="cap"><a href="start.html">Puis le guide : créer une base, l'utiliser, la faire évoluer →</a></p>
+</section>
+
+<footer class="foot">
+  <div class="foot-l">Un langage à la forme de Keal sur PostgreSQL. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealsql">Les sources sur GitHub</a>
+    <a href="design.html">Design</a>
+    <a href="grammar.html">Grammaire</a>
+  </div>
+</footer>
+</div>
+<script src="../site.js"></script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grammar — KealSql</title>
+<meta name="description" content="Le design de KealSql et ses raisons, la grammaire avec ce que chaque construction compile, et le README du dépôt.">
+<link rel="canonical" href="https://geneacta.github.io/kealsql/fr/grammar.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealsql/grammar.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealsql/fr/grammar.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealsql/grammar.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KealSql">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="Grammar — KealSql">
+<meta property="og:description" content="Le design de KealSql et ses raisons, la grammaire avec ce que chaque construction compile, et le README du dépôt.">
+<meta property="og:url" content="https://geneacta.github.io/kealsql/fr/grammar.html">
+<meta property="og:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Grammar — KealSql">
+<meta name="twitter:description" content="Le design de KealSql et ses raisons, la grammaire avec ce que chaque construction compile, et le README du dépôt.">
+<meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="start.html">Premiers pas</a><a href="docs.html" class="tab-active">Docs</a><a href="https://geneacta.github.io/keal/fr/">Keal</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-lang" href="../grammar.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
+  </div>
+</nav>
+<div class="dgrid"><div class="dside"><a href="docs.html">Docs</a><a href="design.html">Design</a><a href="grammar.html" class="on">Grammaire</a><a href="readme.html">README</a></div><div class="dmain prose"><h1 id="kealsql-grammar">KealSql — grammar</h1>
+<p><strong>Status: draft v1.</strong> The syntax of a <code>.kealsql</code> file, in EBNF, with the well-formedness rules the checker enforces on top of it and the SQL each construct compiles to. The decisions behind it are in <a href="design.html">DESIGN.md</a>.</p>
+<p>Notation: <code>X?</code> optional, <code>X*</code> zero or more, <code>X+</code> one or more, <code>"x"</code> a literal token, <code>( … | … )</code> a choice. Terminal names in <em>italics</em> are Keal's own lexical classes.</p>
+<p>The guiding rule: <strong>a <code>.kealsql</code> file is read by Keal's lexer and Keal's expression parser.</strong> KealSql adds two declarations (<code>table</code>, and <code>func</code>/<code>proc</code> whose body is a query), one type form (<code>Ref&lt;T.col&gt;</code>), one value (<code>unknown</code>) and one operator pair (<code>===</code> / <code>!==</code>). Everything else — precedence, strings, <code>when</code>, <code>?:</code>, named arguments — is Keal, unchanged, so the selfhost <code>lexing.keal</code> and the expression tiers of <code>parsing.keal</code> are reused, not rewritten.</p>
+<h2 id="1-lexical">1. Lexical</h2>
+<p>Keal's lexer, plus:</p>
+<div class="tablewrap"><table><thead><tr><th>Addition</th><th>Class</th><th>Note</th></tr></thead><tbody><tr><td><code>unknown</code></td><td>reserved value</td><td>beside <code>true</code>, <code>false</code>, <code>less</code>, <code>equal</code>, <code>greater</code></td></tr><tr><td><code>===</code>, <code>!==</code></td><td>operator, equality tier</td><td>null-safe comparison; read by the parser as <code>==</code> / <code>!=</code> followed by an adjacent <code>=</code></td></tr></tbody></table></div>
+<p><strong>Contextual words</strong> — a declaration where one follows, an ordinary name everywhere else, in the manner of Keal's <code>record</code> / <code>weak</code> / <code>enum</code>:</p>
+<div class="tablewrap"><table><thead><tr><th>Word</th><th>Where it means something</th></tr></thead><tbody><tr><td><code>table</code></td><td>before a name: <code>table User { … }</code></td></tr><tr><td><code>primary</code> <code>slug</code> <code>unique</code> <code>cascade</code> <code>restrict</code> <code>setNull</code></td><td>before a column name, inside a <code>table</code></td></tr><tr><td><code>renamed</code></td><td><code>renamed(old)</code> before a column name, or before <code>table</code></td></tr><tr><td><code>stored</code> <code>pure</code></td><td><code>stored [pure] func</code> — a function that runs inside PostgreSQL</td></tr><tr><td><code>view</code> <code>materialized</code></td><td>before a name: <code>view Name { pipeline }</code>, <code>materialized view Name { … }</code></td></tr><tr><td><code>schema</code></td><td><code>schema Name</code>, once, before the tables: every object of the file lives in that PostgreSQL schema</td></tr><tr><td><code>trigger</code> <code>on</code> <code>before</code> <code>after</code></td><td>`trigger name on Table before</td><td>after insert</td><td>update</td><td>delete { ...Keal... }`</td></tr><tr><td><code>as</code></td><td><code>Table as t</code> in <code>from</code> / <code>join</code>; <code>expr as name</code> in <code>select</code></td></tr></tbody></table></div>
+<p><strong>Nothing else is reserved.</strong> <code>from</code>, <code>where</code>, <code>select</code>, <code>join</code>, <code>orderBy</code>, <code>insert</code>, <code>update</code>, <code>delete</code>, <code>set</code>, <code>like</code> are methods and functions, not keywords — which is why Keal could leave <code>where</code> unreserved and KealSql can too. A column may be called <code>select</code> if its author insists.</p>
+<h2 id="2-file">2. File</h2>
+<pre><code>File          = ( &quot;schema&quot; Ident )? Item* ;
+Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl ;
+ViewDecl      = &quot;materialized&quot;? &quot;view&quot; Ident &quot;{&quot; Pipeline &quot;}&quot; ;   (* ends in select, names its columns *)
+
+Import        = &quot;import&quot; String ( &quot;as&quot; Ident )? ;
+EnumDecl      = &quot;enum&quot; Ident &quot;{&quot; Ident ( &quot;,&quot; Ident )* &quot;,&quot;? &quot;}&quot; ;</code></pre>
+<p>An <code>import</code> brings another <code>.kealsql</code> file's tables and enums into scope, resolved relative to the importing file, loaded once — Keal's rule.</p>
+<p><code>schema Billing</code> puts every table, enum, view, function and trigger of the file in the PostgreSQL schema <code>billing</code>: <code>CREATE SCHEMA IF NOT EXISTS</code> first, every name qualified (<code>billing.invoice</code>, <code>billing.status</code>), the catalog read in that namespace. Without it, <code>public</code>. Prepared statements have no schema; their names are as written.</p>
+<h2 id="3-schema">3. Schema</h2>
+<pre><code>TableDecl     = Renamed? &quot;table&quot; Ident &quot;{&quot; ( Column | TableRule )* &quot;}&quot; ;
+Column        = ( Modifier | Renamed )* Ident &quot;:&quot; Type ( &quot;=&quot; Expr )? ;   (* `= expr`: the DEFAULT *)
+Renamed       = &quot;renamed&quot; &quot;(&quot; Ident &quot;)&quot; ;                 (* the previous name, for the migration *)
+Modifier      = &quot;primary&quot; | &quot;slug&quot; | &quot;unique&quot; | &quot;indexed&quot; | &quot;cascade&quot; | &quot;restrict&quot; | &quot;setNull&quot; ;
+TableRule     = &quot;unique&quot; &quot;(&quot; Ident ( &quot;,&quot; Ident )+ &quot;)&quot;
+              | &quot;index&quot; &quot;(&quot; Ident ( &quot;,&quot; Ident )* &quot;)&quot;
+              | &quot;check&quot; Ident &quot;(&quot; Expr &quot;)&quot; ;              (* named; the expression is over the table&#x27;s columns *)
+
+Type          = ( ScalarType | RefType ) &quot;?&quot;? ;
+ScalarType    = &quot;Id&quot; | &quot;Slug&quot; | &quot;Serial&quot; | &quot;BigSerial&quot;
+              | &quot;Int&quot; | &quot;BigInt&quot; | &quot;Float&quot; | &quot;Bool&quot;
+              | &quot;Decimal&quot; ( &quot;(&quot; Integer &quot;,&quot; Integer &quot;)&quot; )?
+              | &quot;String&quot; ( &quot;(&quot; Integer &quot;)&quot; )?
+              | &quot;Uuid&quot; | &quot;Bytea&quot; | &quot;Date&quot; | &quot;Time&quot; | &quot;Timestamp&quot; | &quot;Timestamptz&quot;
+              | &quot;Interval&quot; | &quot;Json&quot; | &quot;Jsonb&quot; | &quot;Inet&quot;
+              | &quot;List&quot; &quot;&lt;&quot; ScalarType &quot;&gt;&quot;                  (* an array column: integer[] *)
+              | Ident ;                                   (* an enum *)
+RefType       = &quot;RefId&quot;   &quot;&lt;&quot; Ident &quot;&gt;&quot;
+              | &quot;RefSlug&quot; &quot;&lt;&quot; Ident &quot;&gt;&quot;
+              | &quot;Ref&quot;     &quot;&lt;&quot; ColumnRef &quot;&gt;&quot; ;
+ColumnRef     = Ident &quot;.&quot; Ident ;                         (* Table.column *)</code></pre>
+<p><code>ColumnRef</code> in type position is the one syntactic category Keal does not have. It is its own production; the parser does not special-case <code>Ref&lt;</code>.</p>
+<h3 id="well-formedness-checker-not-grammar">Well-formedness (checker, not grammar)</h3>
+<div class="tablewrap"><table><thead><tr><th>Rule</th><th>Error when</th></tr></thead><tbody><tr><td><code>Id</code> ≡ <code>primary _: Serial</code>; <code>Slug</code> ≡ <code>slug _: String</code></td><td>—</td></tr><tr><td>exactly one primary per table</td><td>none, or two (<code>Id</code> counts)</td></tr><tr><td>at most one slug per table</td><td>two (<code>Slug</code> counts)</td></tr><tr><td><code>primary</code>, <code>slug</code>, <code>unique</code> exclude one another on a column</td><td>two on one column</td></tr><tr><td><code>slug</code> column is <code>String</code> or <code>String(n)</code></td><td>any other type</td></tr><tr><td><code>primary</code> and <code>slug</code> columns are not <code>?</code></td><td><code>?</code> present</td></tr><tr><td>a default is a value of the column's type — a literal, <code>now()</code>, <code>today()</code>, <code>uuid()</code>, an array</td><td>a column, or another type</td></tr><tr><td>a check is a <code>Bool</code> over the table's own columns</td><td>any other type, or a reference path</td></tr><tr><td><code>indexed</code> is not written on a key column</td><td>it is</td></tr><tr><td><code>RefId&lt;T&gt;</code> requires <code>T</code> to declare an <code>Id</code></td><td><code>T</code> used <code>primary … : X</code> — the message says <code>Ref&lt;T.col&gt;</code></td></tr><tr><td><code>RefSlug&lt;T&gt;</code> requires <code>T</code> to declare a <code>Slug</code></td><td><code>T</code> used <code>slug … : X</code></td></tr><tr><td><code>Ref&lt;T.c&gt;</code> requires <code>c</code> to be <code>primary</code>, <code>slug</code> or <code>unique</code> in <code>T</code></td><td>otherwise</td></tr><tr><td><code>cascade</code> / <code>restrict</code> / <code>setNull</code> only on a <code>Ref…</code> column</td><td>on a scalar</td></tr><tr><td><code>setNull</code> only on a <code>Ref…?</code></td><td>on a non-optional reference</td></tr><tr><td><code>restrict</code> only on a <code>Ref…?</code> (to override its <code>setNull</code> default)</td><td>on a non-optional reference, where it is already the default</td></tr><tr><td>at most one of <code>cascade</code> / <code>restrict</code> / <code>setNull</code></td><td>two</td></tr><tr><td><code>unique(a, b)</code> names existing columns of the table, at least two</td><td>otherwise</td></tr><tr><td><code>renamed(old)</code> at most once per column or table</td><td>twice</td></tr></tbody></table></div>
+<h3 id="what-it-compiles-to">What it compiles to</h3>
+<div class="tablewrap"><table><thead><tr><th>KealSql</th><th>SQL</th></tr></thead><tbody><tr><td><code>table User { … }</code></td><td><code>CREATE TABLE user (…)</code></td></tr><tr><td><code>id: Id</code></td><td><code>id serial PRIMARY KEY</code></td></tr><tr><td><code>primary token: Uuid</code></td><td><code>token uuid PRIMARY KEY</code></td></tr><tr><td><code>name: Slug</code></td><td><code>name text UNIQUE NOT NULL</code></td></tr><tr><td><code>slug code: String(8)</code></td><td><code>code varchar(8) UNIQUE NOT NULL</code></td></tr><tr><td><code>unique email: String</code></td><td><code>email text UNIQUE NOT NULL</code></td></tr><tr><td><code>email: String?</code></td><td><code>email text</code></td></tr><tr><td><code>unique(a, b)</code></td><td><code>UNIQUE (a, b)</code></td></tr><tr><td><code>author: RefId&lt;User&gt;</code></td><td><code>author integer NOT NULL REFERENCES user(id) ON DELETE RESTRICT</code></td></tr><tr><td><code>editor: RefId&lt;User&gt;?</code></td><td><code>editor integer REFERENCES user(id) ON DELETE SET NULL</code></td></tr><tr><td><code>cascade author: RefId&lt;User&gt;</code></td><td><code>… ON DELETE CASCADE</code></td></tr><tr><td><code>by: RefSlug&lt;User&gt;</code></td><td><code>by text NOT NULL REFERENCES user(name) ON DELETE RESTRICT ON UPDATE CASCADE</code></td></tr><tr><td><code>enum Suit { Hearts, Spades }</code></td><td><code>CREATE TYPE suit AS ENUM ('Hearts', 'Spades')</code></td></tr><tr><td><code>price: Decimal(10, 2) = 0</code></td><td><code>price numeric(10, 2) NOT NULL DEFAULT 0</code></td></tr><tr><td><code>created: Timestamptz = now()</code></td><td><code>created timestamptz NOT NULL DEFAULT now()</code></td></tr><tr><td><code>tags: List&lt;String&gt;</code></td><td><code>tags text[] NOT NULL</code></td></tr><tr><td><code>indexed stock: Int</code> / <code>index(a, b)</code></td><td><code>CREATE INDEX item_stock_idx ON item (stock)</code> / <code>item_a_b_idx</code></td></tr><tr><td><code>check inStock(stock &gt;= 0)</code></td><td><code>CONSTRAINT item_in_stock_check CHECK (stock &gt;= 0)</code></td></tr><tr><td><code>Ref&lt;T.c&gt;</code> column</td><td>the type of <code>c</code>; <code>REFERENCES t(c)</code></td></tr></tbody></table></div>
+<p><strong>Naming.</strong> Identifiers are emitted in <code>snake_case</code>, unquoted: <code>fullName</code> → <code>full_name</code>, <code>Post</code> → <code>post</code>, <code>RefId&lt;User&gt;</code> → <code>user(id)</code>. PostgreSQL folds unquoted identifiers to lower case, and quoting them would make every <code>psql</code> session pay for KealSql's spelling. A <code>.kealsql</code> name that collides with a SQL reserved word (<code>user</code>, <code>order</code>, <code>group</code>) is emitted quoted, and the compiler says so. <em>(Reversible decision.)</em></p>
+<h2 id="4-queries-and-mutations">4. Queries and mutations</h2>
+<pre><code>QueryDecl     = &quot;func&quot; Ident &quot;(&quot; Params? &quot;)&quot; &quot;:&quot; ResultType Block ;
+MutationDecl  = &quot;proc&quot; Ident &quot;(&quot; Params? &quot;)&quot; Block ;
+Params        = Param ( &quot;,&quot; Param )* ;
+Param         = Ident &quot;:&quot; Type ( &quot;=&quot; Expr )? ;
+
+ResultType    = &quot;List&quot; &quot;&lt;&quot; RowType &quot;&gt;&quot;          (* many rows *)
+              | RowType &quot;?&quot;                     (* .first() *)
+              | RowType                         (* .single(), or insert *)
+              | ScalarType ;                    (* count(), exists() *)
+RowType       = Ident                           (* a table: select(*) *)
+              | &quot;(&quot; Type ( &quot;,&quot; Type )+ &quot;)&quot;      (* a tuple: select(a, b) *)
+              | Type ;                          (* one column: select(a) *)
+
+Block         = &quot;{&quot; Binding* Pipeline &quot;}&quot; ;
+Binding       = &quot;val&quot; Ident &quot;=&quot; ( Fragment | &quot;recursive&quot; &quot;(&quot; Pipeline &quot;,&quot; Pipeline &quot;)&quot; ) ;</code></pre>
+<p>Keal's <code>func</code> / <code>proc</code> split does the work here. A <code>func</code> must produce a value, so its pipeline ends in a terminal and its <code>insert</code> carries <code>RETURNING *</code>. A <code>proc</code> produces nothing, so its pipeline is a mutation without <code>RETURNING</code>, and a <code>proc</code> that ends in <code>select</code> is an error — Keal's "using a <code>proc</code>'s result is an error" in the other direction.</p>
+<p>Parameters become <code>$1</code>, <code>$2</code>, … in the emitted SQL, in declaration order. A parameter of type <code>T?</code> may be compared; the result is <code>Bool3</code> (§5).</p>
+<h3 id="pipeline">Pipeline</h3>
+<pre><code>Pipeline      = Fragment &quot;.&quot; Terminal ( &quot;.&quot; Fetch )?
+              | Mutation ;
+
+Fragment      = Source ( &quot;.&quot; Stage )*
+              | Ident ;                                    (* a val-bound fragment *)
+Source        = &quot;from&quot; &quot;(&quot; Ident ( &quot;as&quot; Ident )? &quot;)&quot; ;
+
+Stage         = &quot;where&quot;    &quot;(&quot; Expr &quot;)&quot;
+              | &quot;unless&quot;   &quot;(&quot; Expr &quot;)&quot;
+              | &quot;join&quot;     &quot;(&quot; Ident ( &quot;as&quot; Ident )? &quot;,&quot; Expr &quot;)&quot;
+              | &quot;leftJoin&quot; &quot;(&quot; Ident ( &quot;as&quot; Ident )? &quot;,&quot; Expr &quot;)&quot;
+              | &quot;fullJoin&quot; &quot;(&quot; Ident ( &quot;as&quot; Ident )? &quot;,&quot; Expr &quot;)&quot;   (* every column in scope becomes optional *)
+              | &quot;crossJoin&quot; &quot;(&quot; Ident ( &quot;as&quot; Ident )? &quot;)&quot;
+              | &quot;orderBy&quot;  &quot;(&quot; OrderKey ( &quot;,&quot; OrderKey )* &quot;)&quot;
+              | &quot;groupBy&quot;  &quot;(&quot; Expr ( &quot;,&quot; Expr )* &quot;)&quot;
+              | &quot;distinct&quot; &quot;(&quot; &quot;)&quot;
+              | &quot;forUpdate&quot; &quot;(&quot; &quot;skipLocked&quot;? &quot;)&quot;          (* rows locked for the transaction *)
+              | &quot;limit&quot;    &quot;(&quot; Expr &quot;)&quot;
+              | &quot;offset&quot;   &quot;(&quot; Expr &quot;)&quot; ;
+OrderKey      = Expr ( &quot;.&quot; ( &quot;asc&quot; | &quot;desc&quot; ) )? ( &quot;.&quot; ( &quot;nullsFirst&quot; | &quot;nullsLast&quot; ) )? ;
+
+Terminal      = &quot;select&quot; &quot;(&quot; ( &quot;*&quot; | Expr ( &quot;,&quot; Expr )* ) &quot;)&quot;
+              | &quot;count&quot;  &quot;(&quot; &quot;)&quot;
+              | &quot;exists&quot; &quot;(&quot; &quot;)&quot; ;
+Fetch         = &quot;first&quot; &quot;(&quot; &quot;)&quot;                            (* LIMIT 1, type T? *)
+              | &quot;single&quot; &quot;(&quot; &quot;)&quot;                           (* exactly one, type T *)
+              | SetOp &quot;(&quot; Pipeline &quot;)&quot; ;                   (* after select: another select, same columns *)
+SetOp         = &quot;union&quot; | &quot;unionAll&quot; | &quot;intersect&quot; | &quot;except&quot; ;
+
+Mutation      = &quot;insert&quot; &quot;(&quot; Row ( &quot;,&quot; Row )* &quot;)&quot; ( &quot;.&quot; &quot;onConflict&quot; &quot;(&quot; Ident ( &quot;,&quot; Ident )* &quot;)&quot; &quot;.&quot; ( &quot;ignore&quot; &quot;(&quot; &quot;)&quot; | &quot;update&quot; &quot;(&quot; NamedArgs &quot;)&quot; ) )?
+              | &quot;insertInto&quot; &quot;(&quot; Ident &quot;,&quot; Pipeline &quot;)&quot;   (* the query&#x27;s columns, by name, into the table *)
+              | &quot;update&quot; &quot;(&quot; Source &quot;)&quot; ( &quot;.&quot; ( &quot;join&quot; &quot;(&quot; Source &quot;,&quot; Expr &quot;)&quot; | &quot;where&quot; &quot;(&quot; Expr &quot;)&quot; ) )* &quot;.&quot; &quot;set&quot; &quot;(&quot; NamedArgs &quot;)&quot;
+              | &quot;delete&quot; &quot;(&quot; Source &quot;)&quot; ( &quot;.&quot; ( &quot;join&quot; &quot;(&quot; Source &quot;,&quot; Expr &quot;)&quot; | &quot;where&quot; &quot;(&quot; Expr &quot;)&quot; ) )*
+              | &quot;sql&quot; &quot;(&quot; String &quot;)&quot;                       (* the escape hatch: SQL as written *)
+              | &quot;refresh&quot; &quot;(&quot; Ident &quot;)&quot; ;                  (* a materialized view, brought up to date *)
+Source        = Ident ( &quot;as&quot; Ident )? ;
+Row           = Ident &quot;(&quot; NamedArgs &quot;)&quot; ;
+NamedArgs     = Ident &quot;=&quot; Expr ( &quot;,&quot; Ident &quot;=&quot; Expr )* ;</code></pre>
+<p><code>from</code> comes first and <code>select</code> last: the evaluation order, not SQL's writing order, so that at <code>select(id)</code> the checker already knows which table <code>id</code> belongs to. Stages may repeat; two <code>where</code>s are <code>AND</code>ed. A <code>where</code> that follows a <code>groupBy</code> is a <code>HAVING</code>. A <code>val</code>-bound fragment used inside another pipeline (<code>id in recent.select(id)</code>) is a subquery; used as the source of the final pipeline it is inlined.</p>
+<p><code>insert(Post(title = t, author = a))</code> is Keal's named-argument constructor call. Columns not named take their SQL default; an <code>Id</code> never needs naming. Omitting a column that has no default and no <code>?</code> is an error, at compile time. Several rows name the same columns. <code>onConflict(cols)</code> names a key the table has — a unique column or a <code>unique(a, b)</code> — and <code>ignore()</code> or <code>update(col = expr)</code> says what happens; in the update, <code>excluded.col</code> is the row that was not inserted and <code>Table.col</code> the one that is there.</p>
+<p>A <code>view</code> is a pipeline with a name: its <code>select</code> names its columns (<code>as</code> where an expression has no name of its own), and it is a source like a table — one without keys, that no reference may point at. A <code>materialized view</code> is the same, stored: <code>refresh(Name)</code> in a <code>proc</code> brings it up to date — a utility statement, which PREPARE refuses, so the SQL output prints it as a comment to run as it is, and a stored function runs it through SPI. <code>recursive(base, step)</code> bound with <code>val</code> is a recursive common table expression: the base select names and types the columns, the step names the binding as a source and selects the same columns, and the pipeline that follows reads it as a table. <code>insertInto(T, query)</code> takes the query's columns, by name, into <code>T</code>. <code>update</code> and <code>delete</code> may <code>join</code> a table: <code>UPDATE ... FROM</code> and <code>DELETE ... USING</code>, the join's condition in the <code>WHERE</code>.</p>
+<p><code>sql("...")</code> is the escape hatch for what the language does not say: the statement as written, <code>$1</code>.. the parameters in order, the declared result trusted — the suite runs it against PostgreSQL, the compiler cannot check it. Only what PostgreSQL prepares is accepted: SELECT, INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.</p>
+<h3 id="what-it-compiles-to">What it compiles to</h3>
+<div class="tablewrap"><table><thead><tr><th>KealSql</th><th>SQL</th></tr></thead><tbody><tr><td><code>from(Post)</code></td><td><code>FROM post</code></td></tr><tr><td><code>from(Post as p)</code></td><td><code>FROM post AS p</code></td></tr><tr><td><code>.where(p)</code></td><td><code>WHERE p</code> — <code>AND</code>ed if repeated; <code>HAVING</code> after <code>groupBy</code></td></tr><tr><td><code>.unless(p)</code></td><td><code>WHERE NOT (p)</code></td></tr><tr><td><code>.join(User as u, p.author == u.id)</code></td><td><code>JOIN user AS u ON p.author = u.id</code></td></tr><tr><td><code>.leftJoin(…)</code></td><td><code>LEFT JOIN … ON …</code></td></tr><tr><td><code>.fullJoin(…)</code> / <code>.crossJoin(T)</code></td><td><code>FULL JOIN … ON …</code> / <code>CROSS JOIN …</code></td></tr><tr><td><code>.select(…).union(q)</code></td><td><code>… UNION (SELECT …)</code>; also <code>unionAll</code>, <code>intersect</code>, <code>except</code>; the columns must agree in number and type</td></tr><tr><td><code>insert(R(…), R(…))</code></td><td><code>VALUES (…), (…)</code></td></tr><tr><td><code>insert(R(…)).onConflict(k).update(a = excluded.a)</code></td><td><code>ON CONFLICT (k) DO UPDATE SET a = EXCLUDED.a</code></td></tr><tr><td><code>insert(R(…)).onConflict(k).ignore()</code></td><td><code>ON CONFLICT (k) DO NOTHING</code></td></tr><tr><td><code>sql("SELECT …")</code></td><td>as written</td></tr><tr><td><code>trigger t on T before insert { … }</code></td><td><code>CREATE OR REPLACE FUNCTION kealsql_trg_t() RETURNS trigger …; CREATE OR REPLACE TRIGGER t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION kealsql_trg_t()</code></td></tr><tr><td><code>view V { … }</code></td><td><code>CREATE VIEW v AS SELECT …; COMMENT ON VIEW v IS 'kealsql:&lt;fingerprint&gt;'</code></td></tr><tr><td><code>materialized view V { … }</code> / <code>refresh(V)</code></td><td><code>CREATE MATERIALIZED VIEW …</code> / <code>REFRESH MATERIALIZED VIEW v</code></td></tr><tr><td><code>val t = recursive(base, step)</code></td><td><code>WITH RECURSIVE t(cols) AS (base UNION ALL step)</code> before the statement</td></tr><tr><td><code>insertInto(T, q)</code></td><td><code>INSERT INTO t (cols) SELECT …</code></td></tr><tr><td><code>update(P as p).join(U as u, c).where(w).set(…)</code></td><td><code>UPDATE p SET … FROM u WHERE c AND w</code></td></tr><tr><td><code>delete(P as p).join(U as u, c).where(w)</code></td><td><code>DELETE FROM p USING u WHERE c AND w</code></td></tr><tr><td><code>select(expr as name)</code></td><td><code>expr AS name</code></td></tr><tr><td><code>.orderBy(created.desc.nullsLast)</code></td><td><code>ORDER BY created DESC NULLS LAST</code></td></tr><tr><td><code>.groupBy(author)</code></td><td><code>GROUP BY author</code></td></tr><tr><td><code>.distinct()</code></td><td><code>SELECT DISTINCT</code></td></tr><tr><td><code>.forUpdate()</code> / <code>.forUpdate(skipLocked)</code></td><td><code>FOR UPDATE</code> / <code>FOR UPDATE SKIP LOCKED</code></td></tr><tr><td><code>.limit(n)</code> / <code>.offset(n)</code></td><td><code>LIMIT n</code> / <code>OFFSET n</code></td></tr><tr><td><code>.select(*)</code></td><td><code>SELECT post.*</code> — typed as the table's record</td></tr><tr><td><code>.select(id, title)</code></td><td><code>SELECT id, title</code> — typed <code>(Int, String)</code></td></tr><tr><td><code>.count()</code></td><td><code>SELECT count(*)</code> — <code>Int</code></td></tr><tr><td><code>.exists()</code></td><td><code>SELECT EXISTS (…)</code> — <code>Bool</code></td></tr><tr><td><code>.first()</code></td><td><code>LIMIT 1</code> — <code>T?</code></td></tr><tr><td><code>.single()</code></td><td><code>LIMIT 2</code>, the driver refuses 0 or 2 — <code>T</code></td></tr><tr><td><code>insert(Post(…))</code> in a <code>func</code></td><td><code>INSERT INTO post (…) VALUES ($1, …) RETURNING *</code></td></tr><tr><td><code>insert(Post(…))</code> in a <code>proc</code></td><td>same, without <code>RETURNING</code></td></tr><tr><td><code>update(Post).where(p).set(title = t)</code></td><td><code>UPDATE post SET title = $1 WHERE p</code></td></tr><tr><td><code>delete(Post).where(p)</code></td><td><code>DELETE FROM post WHERE p</code></td></tr></tbody></table></div>
+<h3 id="stored-functions">Stored functions</h3>
+<pre><code>StoredDecl    = &quot;stored&quot; &quot;pure&quot;? &quot;func&quot; Ident &quot;(&quot; Params? &quot;)&quot; &quot;:&quot; StoredResult KealBody ;
+StoredResult  = ScalarType | &quot;List&quot; &quot;&lt;&quot; ( ScalarType | Ident ) &quot;&gt;&quot; ;   (* many: SETOF a scalar, or SETOF a table&#x27;s rows *)
+KealBody      = &quot;{&quot; ... &quot;}&quot; ;                              (* Keal, verbatim, to the matching brace *)</code></pre>
+<pre><code>TriggerDecl   = &quot;trigger&quot; Ident &quot;on&quot; Ident ( &quot;before&quot; | &quot;after&quot; ) ( &quot;insert&quot; | &quot;update&quot; | &quot;delete&quot; ) KealBody ;</code></pre>
+<p>A trigger's body is Keal with the row in scope as the table's record: <code>row</code> for an insert or an update (the row being written), <code>old</code> for an update or a delete (the one it replaces). A <code>before insert</code> or <code>before update</code> body <em>answers</em> the row to store — <code>row</code>, or <code>row.with(col = …)</code> — and a <code>throw</code> refuses the write with its message as the SQL error; the other bodies answer nothing. Every body may run the file's queries.</p>
+<p>A result <code>List&lt;Int&gt;</code> (or <code>List&lt;String&gt;</code>, …) is <code>RETURNS SETOF</code>: the function is called in a <code>FROM</code>, one row per element. <code>List&lt;Table&gt;</code> answers the table's rows — a Keal <code>List&lt;Product&gt;</code>, as the file's own queries already produce them — as <code>SETOF product</code>, usable like the table.</p>
+<p>The signature is KealSql's — <code>Int</code>, <code>Float</code>, <code>Bool</code> or <code>String</code>, none optional, no <code>String(n)</code> — and the body is Keal's: the parser finds the matching brace and keeps the text for the Keal toolchain. <code>pure</code> declares the function <code>IMMUTABLE</code>; without it, <code>VOLATILE</code>. A stored function is called in expressions like any function, <code>slugify(name)</code>; its arguments are checked against the signature, and an optional argument makes the result optional — the function is STRICT, so a null never reaches it.</p>
+<p>Inside the body, every <code>func</code> and <code>proc</code> of the file is a Keal function with the same name and parameters, and a Keal result: <code>List&lt;T&gt;</code>, <code>T?</code> for <code>first()</code>, <code>T</code> for <code>single()</code> and for a mutation with a row back, <code>Int</code> for <code>count()</code>, <code>Bool</code> for <code>exists()</code>, nothing for a <code>proc</code>. A row is a <code>record</code>: the table's, for <code>select(*)</code> and mutations; one named after the query with a <code>Row</code> suffix and fields named after the selected columns, for several columns. A query that fails is a Keal exception (<code>try</code> catches it) carrying the query's name and PostgreSQL's message.</p>
+<h2 id="5-expressions">5. Expressions</h2>
+<p>Keal's expression grammar, Keal's precedence — <em>tightest binding last</em>:</p>
+<pre><code>not and or xor xnor nand nor implies
+==  !=  ===  !==  &lt;==&gt;   &lt;  &lt;=  &gt;  &gt;=   is   in   ?:   ..
++  -   *  /  %   unary -   . ?. [] ()</code></pre>
+<p>Removed from Keal for v1: the bit operators, <code>**</code> and <code>^/</code>, lambdas, assignment, <code>while</code> / <code>for</code>. Added: <code>===</code> / <code>!==</code> at the equality tier, and <code>unknown</code>.</p>
+<h3 id="names">Names</h3>
+<p>A bare identifier in a pipeline resolves against the function's parameters first — the innermost scope, as in Keal — then against the columns of the tables in scope, the <code>from</code> table and every <code>join</code>ed one. A column a parameter shadows is reached qualified: <code>where(Product.sku == sku)</code>. An ambiguous column (present in two tables in scope) is an error naming both; qualify it with the table or its alias: <code>p.title</code>, <code>Post.title</code>. The same parameter on both sides of a comparison is refused, naming the column.</p>
+<p>A dotted path through a reference is an implicit join:</p>
+<div class="tablewrap"><table><thead><tr><th>Path</th><th>Type</th><th>Emitted join</th></tr></thead><tbody><tr><td><code>post.author.name</code> with <code>author: RefId&lt;User&gt;</code></td><td><code>String</code></td><td><code>JOIN user ON post.author = user.id</code></td></tr><tr><td><code>post.editor?.name</code> with <code>editor: RefId&lt;User&gt;?</code></td><td><code>String?</code></td><td><code>LEFT JOIN user ON post.editor = user.id</code></td></tr><tr><td><code>post.editor.name</code> with <code>editor: RefId&lt;User&gt;?</code></td><td><em>error</em></td><td>"<code>editor</code> is optional; write <code>editor?.name</code>"</td></tr></tbody></table></div>
+<p>This is Keal's null safety doing SQL's join arithmetic: <code>.</code> through a non-optional reference is an inner join, <code>?.</code> through an optional one is a left join, and the type of the result says which happened.</p>
+<h3 id="typing-rules">Typing rules</h3>
+<div class="tablewrap"><table><thead><tr><th>Expression</th><th>Type</th></tr></thead><tbody><tr><td><code>a == b</code>, <code>a != b</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> — both operands non-optional</td><td><code>Bool</code></td></tr><tr><td>same, at least one operand <code>T?</code></td><td><code>Bool3</code></td></tr><tr><td><code>a == null</code>, <code>a != null</code></td><td><code>Bool</code> (<code>IS NULL</code> / <code>IS NOT NULL</code>)</td></tr><tr><td><code>a === b</code>, <code>a !== b</code></td><td><code>Bool</code> always (<code>IS [NOT] DISTINCT FROM</code>)</td></tr><tr><td><code>a &lt;=&gt; b</code>, both non-optional</td><td><code>Comp</code> (a <code>CASE</code> on <code>&lt;</code> and <code>=</code>)</td></tr><tr><td><code>a &lt;=&gt; b</code>, an operand <code>T?</code></td><td><code>Comp?</code></td></tr><tr><td><code>not p</code>, <code>p and q</code>, … with a <code>Bool3</code> operand</td><td><code>Bool3</code>, Kleene tables</td></tr><tr><td><code>a ?: b</code> with <code>a: T?</code>, <code>b: T</code></td><td><code>T</code> (<code>COALESCE</code>)</td></tr><tr><td><code>when { … }</code></td><td>the arms' common type (<code>CASE WHEN</code>)</td></tr><tr><td><code>x in [a, b]</code></td><td><code>Bool</code> / <code>Bool3</code> as for <code>==</code> (<code>IN (…)</code>)</td></tr><tr><td><code>x in fragment.select(c)</code></td><td>same (<code>IN (SELECT …)</code>)</td></tr><tr><td><code>s.like(p)</code>, <code>s.ilike(p)</code></td><td><code>Bool</code> / <code>Bool3</code> (<code>LIKE</code> / <code>ILIKE</code>)</td></tr><tr><td><code>s.lower()</code>, <code>s.upper()</code>, <code>s.length()</code>, <code>s.trim()</code></td><td><code>String</code> / <code>Int</code>, <code>?</code>-preserving</td></tr><tr><td><code>["a", "b"]</code></td><td><code>String[]</code> (<code>ARRAY['a', 'b']</code>); an empty <code>[]</code> takes the type of the column or parameter it is given to</td></tr><tr><td><code>xs.size</code>, <code>xs.has(v)</code> on an array</td><td><code>Int</code> (<code>cardinality</code>), <code>Bool</code> / <code>Bool3</code> (<code>v = ANY(xs)</code>)</td></tr><tr><td><code>now()</code>, <code>today()</code>, <code>uuid()</code></td><td><code>Timestamptz</code>, <code>Date</code>, <code>Uuid</code></td></tr><tr><td><code>+ - * / %</code> with a <code>Decimal</code></td><td><code>Decimal</code></td></tr><tr><td><code>count(*)</code>, <code>count(c)</code>, <code>sum(c)</code>, <code>avg(c)</code>, <code>min(c)</code>, <code>max(c)</code></td><td>aggregates; <code>sum</code>/<code>avg</code>/<code>min</code>/<code>max</code> of an empty group are <code>T?</code></td></tr><tr><td><code>countDistinct(c)</code>, <code>stringAgg(s, sep[, key])</code>, <code>arrayAgg(c[, key])</code>, <code>boolAnd(b)</code>, <code>boolOr(b)</code></td><td>aggregates; the key orders what is joined, and without one the database picks</td></tr><tr><td><code>rowNumber()</code>, <code>rank()</code>, <code>denseRank()</code>, <code>lag(x)</code>, <code>lead(x)</code>, or an aggregate, then <code>.over(partition(cols), order(keys))</code></td><td>a window: <code>… OVER (PARTITION BY … ORDER BY …)</code>; <code>lag</code>/<code>lead</code> answer <code>T?</code></td></tr><tr><td><code>s.replace(a, b)</code>, <code>s.substring(from, count)</code>, <code>s.position(sub)</code>, <code>s.split(sep)</code>, <code>s.padStart(n, c)</code>, <code>s.padEnd(n, c)</code></td><td>text; <code>substring</code> and <code>position</code> count from 1, as SQL does</td></tr><tr><td><code>s.matches(re)</code>, <code>s.imatches(re)</code></td><td><code>Bool</code> / <code>Bool3</code> (<code>~</code>, <code>~*</code>)</td></tr><tr><td><code>x.toString()</code>, <code>s.toInt()</code>, <code>s.toFloat()</code>, <code>s.toDecimal()</code></td><td><code>CAST</code></td></tr><tr><td><code>t.year()</code>, <code>month()</code>, <code>day()</code>, <code>hour()</code>, <code>minute()</code>; <code>t.date()</code>; <code>t.plusDays(n)</code>, <code>plusHours(n)</code>, <code>plusMinutes(n)</code></td><td><code>EXTRACT</code>, a cast to <code>date</code>, <code>+ make_interval</code>; a <code>Date</code> plus days stays a <code>Date</code></td></tr><tr><td><code>x?.f()</code></td><td>the same as <code>x.f()</code>: SQL's functions answer null to null; <code>?.</code> on a value that is never null is refused</td></tr><tr><td><code>json("{…}")</code></td><td>a <code>Jsonb</code> literal</td></tr><tr><td><code>j.get(key)</code>, <code>j.at(i)</code>, <code>j.text(key)</code>, <code>j.hasKey(key)</code>, <code>j.contains(json(…))</code></td><td><code>-&gt;</code>, <code>-&gt;</code>, <code>-&gt;&gt;</code> (<code>String?</code>), <code>?</code>, <code>@&gt;</code> on a <code>Json</code> / <code>Jsonb</code></td></tr><tr><td>a <code>Bool3</code> in a <code>select</code></td><td>leaves the query as a <code>Bool?</code>: unknown is null in a row</td></tr><tr><td><code>bytes("6b65616c")</code></td><td>a <code>Bytea</code> literal, from hex</td></tr><tr><td><code>b.length</code>, <code>b.hex()</code>, <code>b.base64()</code>, <code>b.toText()</code>, <code>s.toBytes()</code></td><td><code>octet_length</code>, <code>encode(…, 'hex')</code>, <code>encode(…, 'base64')</code>, <code>convert_from(…, 'UTF8')</code>, <code>convert_to(…, 'UTF8')</code></td></tr><tr><td><code>s.length</code></td><td>characters of a <code>String</code></td></tr><tr><td><code>a &lt;==&gt; b</code></td><td><code>Bool</code>, "does the order separate them" — an <code>Ord</code> question, kept for symmetry with Keal; rarely useful in SQL</td></tr></tbody></table></div>
+<p><code>where(p)</code> and <code>unless(p)</code> accept <code>Bool</code> or <code>Bool3</code>. On <code>Bool3</code> the emitted <code>WHERE</code> keeps <code>true</code> rows only, and the checker warns when <code>p</code> is a plain <code>==</code> / <code>!=</code> on an optional column: <em>"<code>email</code> is <code>String?</code>; rows where it is null are dropped — <code>!==</code> if that is not what you mean"</em>.</p>
+<p>Aggregates appear only in <code>select</code> (and in a <code>where</code> after <code>groupBy</code>). A <code>select</code> that mixes an aggregate with a non-aggregated, non-grouped column is an error — the one SQL only reports at run time.</p>
+<h2 id="6-a-complete-file">6. A complete file</h2>
+<pre><code>enum Status { Draft, Published }
+
+table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    bio:     String?
+}
+
+table Post {
+    id:       Id
+    cascade author: RefId&lt;User&gt;
+    editor:   RefId&lt;User&gt;?
+    title:    String
+    status:   Status
+    created:  Timestamp
+}
+
+func byAuthor(name: String): List&lt;(Int, String)&gt; {
+    from(Post as p)
+        .where(p.author.name == name)
+        .where(status == Published)
+        .orderBy(created.desc)
+        .select(p.id, p.title)
+}
+
+func editorOf(post: Int): String? {
+    from(Post).where(id == post).select(editor?.name).first()
+}
+
+func drafts(): Int {
+    from(Post).where(status == Draft).count()
+}
+
+func publish(post: Int): Post {
+    update(Post).where(id == post).set(status = Published)
+}
+
+proc forget(user: RefId&lt;User&gt;) {
+    delete(Post).where(author == user)
+}</code></pre>
+<p>Each <code>func</code> and <code>proc</code> is emitted as a <code>PREPARE</code>, so the output loads into <code>psql</code> as it is and every query is a prepared statement, its parameters <code>$1</code>, <code>$2</code>, … in declaration order. An implicit join is aliased by the reference column that asked for it. For <code>byAuthor</code>:</p>
+<pre class="lang-sql"><code>-- func byAuthor(name: String): List&lt;(Int, String)&gt;
+PREPARE by_author(text) AS
+SELECT p.id, p.title
+FROM post AS p
+JOIN &quot;user&quot; AS author ON p.author = author.id
+WHERE author.name = $1 AND p.status = &#x27;Published&#x27;
+ORDER BY p.created DESC;</code></pre>
+<p>For <code>editorOf</code> — the <code>?.</code> became a <code>LEFT JOIN</code>, and the result type <code>String?</code> says a post with no editor answers <code>null</code> rather than vanishing:</p>
+<pre class="lang-sql"><code>-- func editorOf(post: Int): String?
+PREPARE editor_of(integer) AS
+SELECT editor.name
+FROM post
+LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
+WHERE post.id = $1
+LIMIT 1;</code></pre>
+<p>The whole file, with its expected output, is <code>tests/cases/blog.kealsql</code>. The <code>Bool3</code> warning of §5 is emitted as a <code>-- warning file:L:C ...</code> comment line above the statement it concerns, so the output stays loadable.</p>
+<h2 id="7-the-command">7. The command</h2>
+<pre><code>kealsql file.kealsql                                   the SQL: schema, then one PREPARE per func / proc
+kealsql --migrate file.kealsql [--db NAME] [--destructive]
+                                                       the migration from a live database to the file
+
+kealsql --plkeal DIR file.kealsql                      the stored functions as DIR/&lt;stem&gt;.keal and DIR/build.sh
+kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCTIONs naming that library
+kealsql --client DIR file.kealsql                      the queries as DIR/&lt;stem&gt;.client.keal, a module over libpq</code></pre>
+<p><code>--client</code> writes a Keal module an application imports: <code>connect&lt;Stem&gt;(conninfo)</code> opens a libpq connection (<code>""</code> leaves it to the <code>PG*</code> environment), and the <code>&lt;Stem&gt;Db</code> it answers has one method per <code>func</code> / <code>proc</code> of the file, with the same Keal types a stored function gets through SPI — rows as records, <code>T?</code> for <code>first()</code>, an exception carrying the query's name and the server's message when it fails — plus <code>begin()</code>, <code>commit()</code>, <code>rollback()</code>, <code>close()</code>. Every statement is prepared once per connection, on first use. Build the program with <code>keal build app.keal -I$(pg_config --includedir) -lpq</code>.</p>
+<p><code>--migrate</code> reads the database through <code>psql</code> — <code>--db</code> is its <code>-d</code>; without it the <code>PG*</code> environment and <code>~/.pgpass</code> decide — and prints <code>ALTER</code>, <code>CREATE</code> and <code>DROP</code> statements to review. Destructive statements are held back as comments unless <code>--destructive</code>; <code>renamed(old)</code> is what makes a rename a rename rather than a drop and an add. <a href="design.html">DESIGN.md</a> §3 has the rules.</p>
+<p><code>--plkeal</code> writes the Keal program and the build script for the shared library of a file's <code>stored func</code>s; <code>build.sh</code> needs <code>keal</code> (or <code>KEAL=</code>), a C compiler, and <code>pg_config</code> for the server headers. The file's SQL then loads with <code>--lib DIR/&lt;stem&gt;.so</code> (without it, <code>$libdir/&lt;stem&gt;</code>). <a href="design.html">DESIGN.md</a> §1 has the mechanism.</p>
+<h2 id="8-implementation-notes">8. Implementation notes</h2>
+<ul><li><strong>Lexer:</strong> <code>keal/selfhost/lexing.keal</code>, imported from the pinned <code>keal</code> dependency (<code>import "dep:keal/selfhost/lexing.keal"</code>) — its public face is <code>lexFile</code>, <code>Token</code>, <code>Part</code>, <code>describeToken</code>, <code>tokenDumpLine</code>, <code>lexErrorPrefix</code>, promised by Keal since <code>0f2e5e9</code>. KealSql's three lexical additions are read by the parser on Keal's tokens: <code>===</code> / <code>!==</code> are <code>==</code> / <code>!=</code> with an adjacent <code>=</code>, and <code>unknown</code> is the identifier in value position, refused as a name.</li><li><strong>Parser:</strong> KealSql's own, <code>src/parser.keal</code>, ~450 lines. Keal's expression tiers were not copied: they build Keal's AST, and KealSql's is smaller. The precedence table is Keal's, connective mixing is refused as Keal refuses it, and two leniencies are KealSql's: a <code>;</code> the lexer put at a line end is dropped when a <code>.</code> follows (a chain continued on the next line), and <code>unless</code> is accepted as a name after a <code>.</code>.</li><li><strong>Pipeline:</strong> parsed as an ordinary Keal method chain — it <em>is</em> one syntactically — and recognised after parsing by the checker (<code>src/compile.keal</code>), which flattens the chain and walks it from <code>from(...)</code> outward. No grammar special-case; the errors ("<code>select</code> ends the query", "<code>set</code> belongs to <code>update</code>") are checker errors with positions.</li><li><strong>Checking and emission are one pass.</strong> Every expression compiles to a <code>Val</code>: its SQL and its type, plus the column it names when it names one, which is what a reference path continues from. A <code>Plan</code> gathers the clauses of one SELECT; rendering it is the last step.</li><li><strong>Migrations:</strong> <code>src/catalog.keal</code> reads <code>pg_catalog</code> in one <code>psql</code> round trip (<code>runCommand</code> with the script on standard input) into a <code>Live</code> model; <code>src/migrate.keal</code> diffs it against the resolved schema and renders <code>Step</code>s, each additive or destructive with its reason.</li><li><strong>Tests:</strong> <code>tests/run.sh</code> — each <code>tests/cases/X.kealsql</code> must produce exactly <code>X.sql</code>, each <code>tests/errors/X.kealsql</code> exactly <code>X.err</code>, the way Keal's suite compares engine output byte for byte. With PostgreSQL on the machine, every case is loaded and executed, and every <code>tests/migrations/X/</code> is migrated, applied in one transaction, and diffed again until it settles.</li></ul></div><div class="dtoc"><div class="h">SUR CETTE PAGE</div><div class="dtoc-items"><a href="#1-lexical">1. Lexical</a><a href="#2-file">2. File</a><a href="#3-schema">3. Schema</a><a href="#4-queries-and-mutations">4. Queries and mutations</a><a href="#5-expressions">5. Expressions</a><a href="#6-a-complete-file">6. A complete file</a><a href="#7-the-command">7. The command</a><a href="#8-implementation-notes">8. Implementation notes</a></div></div></div>
+<footer class="foot">
+  <div class="foot-l">Un langage à la forme de Keal sur PostgreSQL. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealsql">Les sources sur GitHub</a>
+    <a href="design.html">Design</a>
+    <a href="grammar.html">Grammaire</a>
+  </div>
+</footer>
+</div>
+<script src="../site.js"></script>
+</body>
+</html>

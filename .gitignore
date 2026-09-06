@@ -4,3 +4,4 @@
 *.o
 .DS_Store
 /.keal/
+site/__pycache__/

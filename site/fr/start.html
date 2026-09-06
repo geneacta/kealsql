@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Premiers pas — KealSql</title>
+<meta name="description" content="Créer une base PostgreSQL depuis un fichier .kealsql, l&#x27;utiliser depuis psql et depuis un programme Keal, la faire évoluer par migration, et exécuter du Keal dans le serveur.">
+<link rel="canonical" href="https://geneacta.github.io/kealsql/fr/start.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealsql/start.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealsql/fr/start.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealsql/start.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KealSql">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:title" content="Premiers pas — KealSql">
+<meta property="og:description" content="Créer une base PostgreSQL depuis un fichier .kealsql, l&#x27;utiliser depuis psql et depuis un programme Keal, la faire évoluer par migration, et exécuter du Keal dans le serveur.">
+<meta property="og:url" content="https://geneacta.github.io/kealsql/fr/start.html">
+<meta property="og:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Premiers pas — KealSql">
+<meta name="twitter:description" content="Créer une base PostgreSQL depuis un fichier .kealsql, l&#x27;utiliser depuis psql et depuis un programme Keal, la faire évoluer par migration, et exécuter du Keal dans le serveur.">
+<meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <div class="nav-links"><a href="index.html">Accueil</a><a href="start.html" class="tab-active">Premiers pas</a><a href="docs.html">Docs</a><a href="https://geneacta.github.io/keal/fr/">Keal</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-lang" href="../start.html">English</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
+  </div>
+</nav>
+<section class="hero"><h1>Créer une base, et l'utiliser.</h1><p class="lede">Dix minutes d'un PostgreSQL vide à un schéma typé, ses requêtes préparées, une application qui les appelle, et une migration quand le fichier change. Chaque commande ici est celle que la suite de tests exécute.</p></section>
+<section class="band" id="ce-qu-il-faut"><h2>1. Ce qu'il faut</h2>
+<p class="lede"><strong>Keal</strong>, le toolchain — <a href="https://geneacta.github.io/keal/fr/">geneacta.github.io/keal</a> donne les trois commandes ; KealSql veut une version postérieure à <code>2790611</code>, celle que <code>keal fetch</code> épingle.</p>
+<p class="lede"><strong>PostgreSQL 14 ou plus</strong> avec ses outils clients sur le chemin : <code>psql</code>, <code>createdb</code>, <code>pg_config</code>. Les fonctions stockées demandent les en-têtes serveur et un compilateur C (<code>postgresql-server-dev-NN</code> sur Debian et Ubuntu) ; le client, les en-têtes de <code>libpq</code> (<code>libpq-dev</code>).</p>
+<p class="lede">Et KealSql lui-même :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>git clone https://github.com/geneacta/kealsql
+cd kealsql
+keal fetch
+tests/run.sh</pre></div>
+<p class="lede"><code>keal fetch</code> récupère le lexer de Keal, que KealSql importe depuis le commit épinglé dans <code>keal.toml</code>. <code>tests/run.sh</code> lance la suite : si PostgreSQL est sur la machine, elle démarre un serveur privé dans un répertoire temporaire — sans root, sans configuration — et y exécute chaque cas.</p>
+</section>
+<section class="band" id="crire-le-fichier"><h2>2. Écrire le fichier</h2>
+<p class="lede">Un fichier <code>.kealsql</code> tient un schéma et les requêtes qui vont avec. Voici le blog que la suite utilise :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span></div><pre>enum Status { Draft, Published }
+
+table User {
+    id:      Id
+    name:    Slug
+    unique email: String
+    bio:     String?
+}
+
+table Post {
+    id:       Id
+    cascade author: RefId&lt;User&gt;
+    editor:   RefId&lt;User&gt;?
+    title:    String
+    status:   Status
+    created:  Timestamp
+}
+
+func byAuthor(name: String): List&lt;(Int, String)&gt; {
+    from(Post as p)
+        .where(p.author.name == name)
+        .where(status == Published)
+        .orderBy(created.desc)
+        .select(p.id, p.title)
+}
+
+func editorOf(post: Int): String? {
+    from(Post).where(id == post).select(editor?.name).first()
+}
+
+func drafts(): Int {
+    from(Post).where(status == Draft).count()
+}
+
+func publish(post: Int): Post {
+    update(Post).where(id == post).set(status = Published)
+}
+
+proc forget(user: RefId&lt;User&gt;) {
+    delete(Post).where(author == user)
+}</pre></div>
+<p class="lede">Trois choses à voir. <code>Id</code> est une clé primaire serial et <code>Slug</code> un texte unique non nul — les deux clés d'une table, chacune une fois. <code>RefId&lt;User&gt;</code> est une référence, et <code>RefId&lt;User&gt;?</code> une référence optionnelle, ce qui dit ce qui se passe à la suppression (<code>SET NULL</code>) et comment un chemin à travers elle se lit (<code>?.</code>, une jointure gauche). Et une requête commence à <code>from</code> et finit à <code>select</code> : l'ordre d'évaluation, pour qu'au <code>select</code> le checker connaisse déjà chaque colonne.</p>
+</section>
+<section class="band" id="le-compiler"><h2>3. Le compiler</h2>
+<p class="lede">Le compilateur imprime du SQL — le schéma en instructions <code>CREATE</code>, puis un <code>PREPARE</code> par <code>func</code> ou <code>proc</code> :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ blog.sql</span></div><pre>keal src/main.keal blog.kealsql &gt; blog.sql</pre><div class="cwin-out"><pre>CREATE TABLE &quot;user&quot; (
+    id serial PRIMARY KEY,
+    name text UNIQUE NOT NULL,
+    email text UNIQUE NOT NULL,
+    bio text
+);
+
+CREATE TABLE post (
+    id serial PRIMARY KEY,
+    author integer NOT NULL REFERENCES &quot;user&quot;(id) ON DELETE CASCADE,
+    editor integer REFERENCES &quot;user&quot;(id) ON DELETE SET NULL,
+    title text NOT NULL,
+    status status NOT NULL,
+    created timestamp NOT NULL
+);
+
+-- func byAuthor(name: String): List&lt;(Int, String)&gt;
+PREPARE by_author(text) AS
+SELECT p.id, p.title
+FROM post AS p
+JOIN &quot;user&quot; AS author ON p.author = author.id
+WHERE author.name = $1 AND p.status = &#x27;Published&#x27;
+ORDER BY p.created DESC;
+
+-- func editorOf(post: Int): String?
+PREPARE editor_of(integer) AS
+SELECT editor.name
+FROM post
+LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
+WHERE post.id = $1
+LIMIT 1;</pre></div></div>
+<p class="lede">Le chemin à travers <code>editor?.</code> est devenu un <code>LEFT JOIN</code>, et le résultat déclaré <code>String?</code> dit qu'un billet sans éditeur répond null plutôt que de disparaître. C'est à cela que le checker tient chaque requête.</p>
+</section>
+<section class="band" id="cr-er-la-base"><h2>4. Créer la base</h2>
+<p class="lede"><code>createdb</code> fait une base vide ; le fichier compilé y fait tout le reste :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>createdb blog
+psql -d blog -f blog.sql</pre></div>
+<p class="lede">Les <code>CREATE</code> s'exécutent une fois et restent. Les <code>PREPARE</code> vivent le temps de la session qui les exécute — <code>psql</code> ici — donc charger le fichier dans une session ultérieure les prépare à nouveau, et les <code>CREATE</code> échoueraient alors sur des tables qui existent. Pour la première fois c'est exactement ce qu'il faut ; ensuite, <code>--migrate</code> ci-dessous est la façon dont le schéma change, et le client prépare ses propres instructions.</p>
+</section>
+<section class="band" id="l-utiliser-depuis-psql"><h2>5. L'utiliser depuis psql</h2>
+<p class="lede">Dans la même session <code>psql</code>, les requêtes sont des instructions préparées, appelées par leur nom avec leurs paramètres dans l'ordre :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ psql</span></div><pre>psql -d blog -f blog.sql
+
+blog=&gt; EXECUTE by_author(&#x27;ada&#x27;);
+blog=&gt; EXECUTE editor_of(2);</pre><div class="cwin-out"><pre>id|title
+1|Hello
+(1 row)
+name
+bob
+(1 row)
+name
+
+(1 row)</pre></div></div>
+<p class="lede"><code>editor_of(2)</code> répond une ligne qui tient null : le billet existe, son éditeur non — la jointure gauche que le <code>?.</code> demandait. Les noms sont ceux du fichier, en <code>snake_case</code>.</p>
+</section>
+<section class="band" id="l-utiliser-depuis-un-programme"><h2>6. L'utiliser depuis un programme</h2>
+<p class="lede"><code>--client</code> écrit un module Keal où chaque requête est une méthode sur une connexion, avec les mêmes types — les lignes sont des records, <code>first()</code> répond un <code>T?</code>, une requête qui échoue est une exception portant le nom de la requête :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">app.keal</span><span class="run">▶ PGDATABASE=blog ./app</span></div><pre>// An application over tests/cases/blog.kealsql, through the generated client.
+// The suite builds it with libpq, runs it against a fresh database holding
+// blog.sql, and holds its output to blog_app.out.
+
+import &quot;./blog.client.keal&quot;
+
+val db = connectBlog(&quot;&quot;)                                  // PG* in the environment says where
+
+proc show(label: String, posts: List&lt;ByAuthorRow&gt;) {
+    println(&quot;${label}: ${posts.size} post(s)&quot;)
+    for (p in posts) { println(&quot;  #${p.id} ${p.title}&quot;) }
+}
+
+db.begin()
+show(&quot;ada before&quot;, db.byAuthor(&quot;ada&quot;))
+println(&quot;drafts: ${db.drafts()}&quot;)
+val published = db.publish(2)
+println(&quot;published: ${published.title} (${published.status})&quot;)
+println(&quot;drafts now: ${db.drafts()}&quot;)
+show(&quot;ada after&quot;, db.byAuthor(&quot;ada&quot;))
+val editor = db.editorOf(1)
+println(&quot;editor of #1: ${editor ?: &quot;none&quot;}&quot;)
+println(&quot;editor of #2: ${db.editorOf(2) ?: &quot;none&quot;}&quot;)
+db.rollback()
+println(&quot;drafts after rollback: ${db.drafts()}&quot;)
+try {
+    db.publish(999)
+    println(&quot;unreachable&quot;)
+} catch (e) {
+    println(&quot;caught: ${e}&quot;)
+}
+db.forget(2)
+println(&quot;posts left: ${db.drafts() + db.byAuthor(&quot;ada&quot;).size}&quot;)
+db.close()</pre><div class="cwin-out"><pre>ada before: 1 post(s)
+  #1 Hello
+drafts: 1
+published: Draft one (Published)
+drafts now: 0
+ada after: 2 post(s)
+  #2 Draft one
+  #1 Hello
+editor of #1: bob
+editor of #2: none
+drafts after rollback: 1
+caught: publish: expected one row, got 0
+posts left: 2</pre></div></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal src/main.keal --client app/ blog.kealsql
+cp app.keal app/
+keal build app/app.keal -I$(pg_config --includedir) -lpq -o app
+PGDATABASE=blog ./app</pre></div>
+<p class="lede">La chaîne de connexion est celle de libpq ; vide, elle laisse tout à l'environnement <code>PG*</code> et à <code>~/.pgpass</code>. Compilez le programme contre <code>libpq</code> :</p>
+</section>
+<section class="band" id="la-faire-voluer"><h2>7. La faire évoluer</h2>
+<p class="lede">Changez le fichier — disons un <code>bio: String?</code> sur <code>User</code>, et <code>Post</code> renommé en <code>Article</code> — et demandez la différence avec la base vivante :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ migration.sql</span></div><pre>keal src/main.keal --migrate blog.kealsql --db blog &gt; migration.sql
+cat migration.sql
+psql -1 -d blog -f migration.sql
+keal src/main.keal --migrate blog.kealsql --db blog
+# -- nothing to do: the database matches the declaration</pre><div class="cwin-out"><pre>ALTER TABLE post RENAME TO article;
+ALTER TABLE &quot;user&quot; ADD COLUMN bio text;
+-- DESTRUCTIVE, held back (pass --destructive to emit it): every row of `legacy` is lost
+-- DROP TABLE legacy;
+-- 1 statement held back</pre></div></div>
+<p class="lede">La migration est imprimée pour que vous la lisiez, jamais appliquée par le compilateur. Les étapes additives viennent telles quelles. Les destructives — une colonne supprimée, un type rétréci, un nouveau <code>NOT NULL</code> — sont retenues en commentaires qui nomment ce qu'elles coûteraient, jusqu'à <code>--destructive</code>. Un renommage n'est jamais deviné : <code>renamed(old)</code> dans le fichier le dit, et une fois la base renommée l'annotation est une note que vous pouvez laisser.</p>
+<p class="lede">Appliquez-la en une transaction, et redemandez : la réponse doit être <em>nothing to do</em>.</p>
+</section>
+<section class="band" id="ex-cuter-du-keal-dans-le-serveur"><h2>8. Exécuter du Keal dans le serveur</h2>
+<p class="lede">Une <code>stored func</code> est du Keal que PostgreSQL exécute comme fonction <code>LANGUAGE C</code> ; un <code>trigger</code> est la même chose sur chaque ligne écrite. Leurs corps peuvent appeler les requêtes du fichier, typées, via SPI :</p>
+<div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span></div><pre>// A URL-safe form of a name: letters and digits, one dash between runs.
+stored pure func slugify(s: String): String {
+    var out = &quot;&quot;
+    var dash = false
+    for (c in s.toLower()) {
+        if ((c &gt;= &quot;a&quot; and c &lt;= &quot;z&quot;) or (c &gt;= &quot;0&quot; and c &lt;= &quot;9&quot;)) {
+            out += c
+            dash = false
+        } else if (not dash and out != &quot;&quot;) {
+            out += &quot;-&quot;
+            dash = true
+        }
+    }
+    if (out.endsWith(&quot;-&quot;)) { out = out.take(out.length - 1) }
+    return out
+}
+
+trigger normalizeSku on Product before insert {
+    return row.with(sku = row.sku.toUpper(), note = row.note ?: &quot;new&quot;)
+}</pre></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal src/main.keal --plkeal build/ blog.kealsql
+sh build/build.sh
+keal src/main.keal --lib $PWD/build/blog.so blog.kealsql | psql -d blog</pre></div>
+<p class="lede"><code>--plkeal</code> écrit un programme Keal et un <code>build.sh</code> qui en fait une bibliothèque partagée contre les en-têtes serveur ; le SQL du fichier porte alors les <code>CREATE FUNCTION</code>, en nommant la bibliothèque par <code>--lib</code> :</p>
+</section>
+<section class="band" id="et-ensuite"><h2>9. Et ensuite</h2>
+<p class="lede"><a href="docs.html">Les docs</a> : le design et ses raisons, la grammaire avec ce que chaque construction compile, et la carte du dépôt du README. <a href="https://github.com/geneacta/kealsql/blob/main/examples/shop.kealsql">examples/shop.kealsql</a> est un vrai fichier — six tables, une vingtaine de requêtes — que la suite compile, charge et exécute sur des données.</p>
+</section>
+<footer class="foot">
+  <div class="foot-l">Un langage à la forme de Keal sur PostgreSQL. Construit par Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealsql">Les sources sur GitHub</a>
+    <a href="design.html">Design</a>
+    <a href="grammar.html">Grammaire</a>
+  </div>
+</footer>
+</div>
+<script src="../site.js"></script>
+</body>
+</html>
