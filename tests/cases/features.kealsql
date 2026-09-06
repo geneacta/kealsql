@@ -49,7 +49,7 @@ func sameAgeStrict(years: Int?): List<Int> {
 
 // A where after groupBy is HAVING; an aggregate in select.
 func crowdedRoles(): List<(Role, Int)> {
-    from(Account).groupBy(role).where(count(*) > 1).select(role, count(*))
+    from(Account).groupBy(role).where(count(*) > 1).orderBy(role).select(role, count(*))
 }
 
 // A closed when over an enum needs no else.

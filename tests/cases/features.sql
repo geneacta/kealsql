@@ -56,7 +56,8 @@ PREPARE crowded_roles AS
 SELECT account.role, count(*)
 FROM account
 GROUP BY account.role
-HAVING count(*) > 1;
+HAVING count(*) > 1
+ORDER BY account.role;
 
 -- func label(acc: Int): String?
 PREPARE label(integer) AS

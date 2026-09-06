@@ -112,6 +112,7 @@ func revenueByStatus(): List<(OrderStatus, Int)> {
     from(Order as o)
         .join(OrderLine as l, l.order == o.id)
         .groupBy(o.status)
+        .orderBy(o.status)
         .select(o.status, sum(l.quantity * l.unitCents) ?: 0)
 }
 

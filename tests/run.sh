@@ -169,10 +169,12 @@ done
 # `--migrate` must then print exactly settled.sql — the notes, and nothing
 # to do.
 # A file with stored functions or triggers needs its library: built here, named by --lib.
+# Answers 0 with the library's path, 1 when it does not build, 2 when this
+# machine cannot build one — a skip, not a failure.
 libfor() {
     if grep -qE '^(stored|trigger) ' "$1"; then
-        [ -z "$WINDOWS" ] || return 1
-        [ -f "$PGINC/postgres.h" ] || return 1
+        [ -z "$WINDOWS" ] || return 2
+        [ -f "$PGINC/postgres.h" ] || return 2
         dir="$PGDIR/plkeal/$(basename "$(dirname "$1")")_$(basename "${1%.kealsql}")"
         "$KEAL" src/main.keal --plkeal "$dir" "$1" > /dev/null && KEAL="$KEAL" sh "$dir/build.sh" > "$dir/build.log" 2>&1 && echo "$dir/$(basename "${1%.kealsql}").so"
     fi
@@ -180,8 +182,12 @@ libfor() {
 for d in tests/migrations/*/; do
     name="mig_$(basename "$d")"
     $PSQL -d postgres -c "CREATE DATABASE $name" > /dev/null
-    blib=$(libfor "$d/before.kealsql") || { echo "FAIL $d: its library does not build (or the server headers are missing)"; failed=1; continue; }
-    alib=$(libfor "$d/after.kealsql") || { echo "FAIL $d: its library does not build (or the server headers are missing)"; failed=1; continue; }
+    blib=$(libfor "$d/before.kealsql"); rc=$?
+    [ "$rc" = 2 ] && { echo "skip $d: its library cannot be built on this machine"; continue; }
+    [ "$rc" = 0 ] || { echo "FAIL $d: its library does not build"; failed=1; continue; }
+    alib=$(libfor "$d/after.kealsql"); rc=$?
+    [ "$rc" = 2 ] && { echo "skip $d: its library cannot be built on this machine"; continue; }
+    [ "$rc" = 0 ] || { echo "FAIL $d: its library does not build"; failed=1; continue; }
     LIBB=""; [ -n "$blib" ] && LIBB="--lib $blib"
     LIBA=""; [ -n "$alib" ] && LIBA="--lib $alib"
     if ! "$KEAL" src/main.keal $LIBB "$d/before.kealsql" | $PSQL -d "$name" > "$PGDIR/before.log" 2>&1; then

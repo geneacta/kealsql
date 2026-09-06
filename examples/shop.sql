@@ -133,7 +133,8 @@ PREPARE revenue_by_status AS
 SELECT o.status, COALESCE(sum(l.quantity * l.unit_cents), 0)
 FROM "order" AS o
 JOIN order_line AS l ON l."order" = o.id
-GROUP BY o.status;
+GROUP BY o.status
+ORDER BY o.status;
 
 -- func bigSpenders(minCents: Int): List<(String, Int)>
 PREPARE big_spenders(integer) AS
