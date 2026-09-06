@@ -154,8 +154,8 @@ libfor() {
 for d in tests/migrations/*/; do
     name="mig_$(basename "$d")"
     $PSQL -d postgres -c "CREATE DATABASE $name" > /dev/null
-    blib=$(libfor "$d/before.kealsql") || { echo "skip $d: server headers missing for its library"; continue; }
-    alib=$(libfor "$d/after.kealsql") || { echo "skip $d: server headers missing for its library"; continue; }
+    blib=$(libfor "$d/before.kealsql") || { echo "FAIL $d: its library does not build (or the server headers are missing)"; failed=1; continue; }
+    alib=$(libfor "$d/after.kealsql") || { echo "FAIL $d: its library does not build (or the server headers are missing)"; failed=1; continue; }
     LIBB=""; [ -n "$blib" ] && LIBB="--lib $blib"
     LIBA=""; [ -n "$alib" ] && LIBA="--lib $alib"
     if ! "$KEAL" src/main.keal $LIBB "$d/before.kealsql" | $PSQL -d "$name" > "$PGDIR/before.log" 2>&1; then
