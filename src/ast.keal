@@ -113,6 +113,7 @@ package class TriggerN(package val name: String, package val table: String, pack
 }
 
 package class ProgramN() {
+    package var schema: String = ""          // `schema name`: every object of the file lives there; "" is public
     package var triggers: List<TriggerN> = []
     package var views: List<ViewN> = []
     package var imports: List<String> = []

@@ -47,7 +47,8 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             "Json" -> "json"
             "Jsonb" -> "jsonb"
             "Inet" -> "inet"
-            else -> snakeName(scalar)
+            // An enum: format_type qualifies a type outside the search path.
+            else -> if (this.schema().name == "") { snakeName(scalar) } else { "${snakeName(this.schema().name)}.${snakeName(scalar)}" }
         }
     }
 
@@ -128,15 +129,16 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         val body = when (k.kind) {
             "p" -> "PRIMARY KEY (${cols})"
             "u" -> "UNIQUE (${cols})"
-            else -> "FOREIGN KEY (${cols}) REFERENCES ${quoteIf(k.refTable)}(${k.refCols.map({ quoteIf(it) }).join(", ")}) ON DELETE ${this.actionWord(k.onDelete)} ON UPDATE ${this.actionWord(k.onUpdate)}"
+            else -> "FOREIGN KEY (${cols}) REFERENCES ${qual(this.schema(), k.refTable)}(${k.refCols.map({ quoteIf(it) }).join(", ")}) ON DELETE ${this.actionWord(k.onDelete)} ON UPDATE ${this.actionWord(k.onUpdate)}"
         }
-        return "ALTER TABLE ${quoteIf(tn)} ADD CONSTRAINT ${k.name} ${body};"
+        return "ALTER TABLE ${qual(this.schema(), tn)} ADD CONSTRAINT ${k.name} ${body};"
     }
 
     // ---- the diff ---------------------------------------------------------
 
     package func run(): String {
         val schema = this.schema()
+        if (schema.name != "" and not this.live.hasSchema) { this.add("CREATE SCHEMA ${quoteIf(snakeName(schema.name))};") }
         this.enums()
         // Renames first, so that everything after sees the new names.
         val liveNameOf: Map<String, String> = {}       // declared table -> live table it maps to, "" when new
@@ -145,7 +147,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val tn = snakeName(t.name)
             val old = snakeName(t.decl.renamedFrom)
             if (t.decl.renamedFrom != "" and this.live.tables.containsKey(old) and not this.live.tables.containsKey(tn)) {
-                this.add("ALTER TABLE ${quoteIf(old)} RENAME TO ${quoteIf(tn)};")
+                this.add("ALTER TABLE ${qual(schema, old)} RENAME TO ${quoteIf(tn)};")
                 liveNameOf.set(name, old)
             } else {
                 if (t.decl.renamedFrom != "" and this.live.tables.containsKey(tn)) {
@@ -167,7 +169,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         val kept = liveNameOf.values()
         for (ln in this.live.tableOrder) {
             unless (kept.contains(ln)) {
-                this.drop("DROP TABLE ${quoteIf(ln)};", "every row of `${ln}` is lost")
+                this.drop("DROP TABLE ${qual(schema, ln)};", "every row of `${ln}` is lost")
             }
         }
         this.views()
@@ -187,20 +189,20 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         for (lt in this.live.triggers) {
             unless (lt.function.startsWith("kealsql_trg_")) { continue }
             val tr = program.triggers.find({ snakeName(it.name) == lt.name })
-            if (tr == null) { this.add("DROP TRIGGER ${quoteIf(lt.name)} ON ${quoteIf(lt.table)};") }
+            if (tr == null) { this.add("DROP TRIGGER ${quoteIf(lt.name)} ON ${qual(this.schema(), lt.table)};") }
         }
         val fnNames = program.stored.map({ snakeName(it.name) })
         for (lf in this.live.functions) {
             val isTrigger = lf.symbol.startsWith("kealsql_trg_")
             val wanted = if (isTrigger) { trgNames.contains(lf.name.drop(12)) } else { fnNames.contains(lf.name) }
-            unless (wanted) { this.add("DROP FUNCTION ${quoteIf(lf.name)}(${lf.args});") }
+            unless (wanted) { this.add("DROP FUNCTION ${qual(this.schema(), lf.name)}(${lf.args});") }
         }
         for (s in program.stored) {
             val sn = snakeName(s.name)
             val lf = this.live.functions.find({ it.name == sn })
             val same = lf != null and lf.args == this.compiler.storedArgs(s) and lf.result == this.compiler.storedResult(s) and lf.lib == lib
             unless (same) {
-                if (lf != null and lf.args != this.compiler.storedArgs(s)) { this.add("DROP FUNCTION ${quoteIf(sn)}(${lf.args});") }
+                if (lf != null and lf.args != this.compiler.storedArgs(s)) { this.add("DROP FUNCTION ${qual(this.schema(), sn)}(${lf.args});") }
                 this.add(this.compiler.storedFunctionDdl(s))
             }
         }
@@ -229,12 +231,12 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             if (live == null) { changed.add(name); continue }
             if (live.fingerprint != this.compiler.fingerprint(v.viewSql)) {
                 if (live.fingerprint == "") { this.note("view `${vn}` was not made by KealSql; it is replaced") }
-                this.add("DROP VIEW ${quoteIf(vn)};")
+                this.add("DROP VIEW ${qual(schema, vn)};")
                 changed.add(name)
             }
         }
         for (lv in this.live.views) {
-            unless (declared.contains(lv.name)) { this.add("DROP VIEW ${quoteIf(lv.name)};") }
+            unless (declared.contains(lv.name)) { this.add("DROP VIEW ${qual(schema, lv.name)};") }
         }
         for (name in schema.viewOrder) {
             if (changed.contains(name)) { this.add(this.compiler.viewDdl(schema.tables[name]!!).trim()) }
@@ -247,11 +249,11 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val en = snakeName(e.name)
             val labels = this.live.enums[en]
             if (labels == null) {
-                this.add("CREATE TYPE ${quoteIf(en)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});")
+                this.add("CREATE TYPE ${qual(schema, en)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});")
                 continue
             }
             for (v in e.values) {
-                unless (labels.contains(v)) { this.add("ALTER TYPE ${quoteIf(en)} ADD VALUE '${v}';") }
+                unless (labels.contains(v)) { this.add("ALTER TYPE ${qual(schema, en)} ADD VALUE '${v}';") }
             }
             for (l in labels) {
                 unless (e.values.contains(l)) {
@@ -264,12 +266,12 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
     proc dropEnums() {
         val declared = this.compiler.program.enums.map({ snakeName(it.name) })
         for (en in this.live.enumOrder) {
-            unless (declared.contains(en)) { this.drop("DROP TYPE ${quoteIf(en)};", "the type `${en}` is removed") }
+            unless (declared.contains(en)) { this.drop("DROP TYPE ${qual(this.schema(), en)};", "the type `${en}` is removed") }
         }
     }
 
     proc createTable(t: Table) {
-        var sql = "CREATE TABLE ${sqlName(t.name)} (\n"
+        var sql = "CREATE TABLE ${qualName(this.schema(), t.name)} (\n"
         val lines: List<String> = []
         for (c in t.columns) { lines.add("    " + this.compiler.columnDdl(c)) }
         for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
@@ -282,7 +284,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
 
     proc alterTable(t: Table, lt: LiveTable) {
         // Statements name the table as it is now called — after its rename, if any.
-        val tn = sqlName(t.name)
+        val tn = qualName(this.schema(), t.name)
         val seen: List<String> = []                    // live columns accounted for
         for (c in t.columns) {
             val cn = snakeName(c.name)
@@ -340,7 +342,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         // Indexes: by columns.
         val wantIx = this.compiler.indexesOf(t).map({ ix -> ix.map({ snakeName(it) }).join(",") })
         for (ix in lt.indexes) {
-            unless (wantIx.contains(ix.cols.join(","))) { this.add("DROP INDEX ${ix.name};") }
+            unless (wantIx.contains(ix.cols.join(","))) { this.add("DROP INDEX ${qual(this.schema(), ix.name)};") }
         }
         for (ix in this.compiler.indexesOf(t)) {
             val key = ix.map({ snakeName(it) }).join(",")

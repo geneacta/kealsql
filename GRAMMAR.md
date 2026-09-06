@@ -35,6 +35,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
 | `view` | before a name: `view Name { pipeline }` |
+| `schema` | `schema Name`, once, before the tables: every object of the file lives in that PostgreSQL schema |
 | `trigger` `on` `before` `after` | `trigger name on Table before|after insert|update|delete { ...Keal... }` |
 | `as` | `Table as t` in `from` / `join`; `expr as name` in `select` |
 
@@ -46,7 +47,7 @@ too. A column may be called `select` if its author insists.
 ## 2. File
 
 ```
-File          = Item* ;
+File          = ( "schema" Ident )? Item* ;
 Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl ;
 ViewDecl      = "view" Ident "{" Pipeline "}" ;          (* ends in select, names its columns *)
 
@@ -56,6 +57,12 @@ EnumDecl      = "enum" Ident "{" Ident ( "," Ident )* ","? "}" ;
 
 An `import` brings another `.kealsql` file's tables and enums into scope,
 resolved relative to the importing file, loaded once — Keal's rule.
+
+`schema Billing` puts every table, enum, view, function and trigger of the
+file in the PostgreSQL schema `billing`: `CREATE SCHEMA IF NOT EXISTS`
+first, every name qualified (`billing.invoice`, `billing.status`), the
+catalog read in that namespace. Without it, `public`. Prepared statements
+have no schema; their names are as written.
 
 ## 3. Schema
 

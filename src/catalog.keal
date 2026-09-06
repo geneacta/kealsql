@@ -35,6 +35,7 @@ package class LiveFunction(package val name: String, package val args: String, p
 package class LiveTrigger(package val name: String, package val table: String, package val timing: String, package val event: String, package val function: String)
 
 package class Live() {
+    package var hasSchema: Bool = false      // the namespace exists
     package var functions: List<LiveFunction> = []
     package var triggers: List<LiveTrigger> = []
     package var views: List<LiveView> = []
@@ -44,19 +45,20 @@ package class Live() {
     package var tableOrder: List<String> = []
 }
 
-val catalogScript = """
+func catalogScript(ns: String): String { return """
+SELECT 'S', nspname FROM pg_namespace WHERE nspname = 'NS';
 SELECT 'E', t.typname, e.enumlabel
 FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid
-WHERE t.typnamespace = 'public'::regnamespace
+WHERE t.typnamespace = 'NS'::regnamespace
 ORDER BY t.typname, e.enumsortorder;
 SELECT 'T', c.relname
 FROM pg_class c
-WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
+WHERE c.relkind = 'r' AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname;
 SELECT 'C', c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
        coalesce((SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum), '')
 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
-WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
+WHERE c.relkind = 'r' AND c.relnamespace = 'NS'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum;
 SELECT 'K', c.relname, k.contype, k.conname,
        coalesce((SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.conkey) WITH ORDINALITY x(attnum, ord)
@@ -67,30 +69,31 @@ SELECT 'K', c.relname, k.contype, k.conname,
        k.confdeltype, k.confupdtype,
        CASE WHEN k.contype = 'c' THEN pg_get_constraintdef(k.oid) ELSE '' END
 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
-WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'public'::regnamespace
+WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname, k.conname;
 SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), '')
 FROM pg_class c
-WHERE c.relkind = 'v' AND c.relnamespace = 'public'::regnamespace
+WHERE c.relkind = 'v' AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname;
 SELECT 'F', p.proname, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), coalesce(p.probin, ''), p.prosrc
 FROM pg_proc p
-WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc LIKE 'kealsql\_%'
+WHERE p.pronamespace = 'NS'::regnamespace AND p.prosrc LIKE 'kealsql\_%'
 ORDER BY p.proname;
 SELECT 'G', t.tgname, c.relname,
        CASE WHEN (t.tgtype & 2) = 2 THEN 'before' ELSE 'after' END,
        CASE WHEN (t.tgtype & 4) = 4 THEN 'insert' WHEN (t.tgtype & 8) = 8 THEN 'delete' ELSE 'update' END,
        p.proname
 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid
-WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace
+WHERE NOT t.tgisinternal AND c.relnamespace = 'NS'::regnamespace
 ORDER BY t.tgname;
 SELECT 'I', c.relname, i.relname,
        (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
 FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_class i ON i.oid = x.indexrelid
-WHERE c.relnamespace = 'public'::regnamespace AND NOT x.indisprimary AND NOT x.indisunique
+WHERE c.relnamespace = 'NS'::regnamespace AND NOT x.indisprimary AND NOT x.indisunique
 ORDER BY c.relname, i.relname;
-"""
+""".replace("NS", ns)
+}
 
 /// The `psql` invocation. `db` is `-d`'s argument, or "" to let the
 /// PG* environment and ~/.pgpass decide, as psql itself does.
@@ -101,8 +104,8 @@ func psqlArgv(db: String): List<String> {
 }
 
 /// Reads the database, or explains why it could not and stops.
-package func readLive(db: String): Live {
-    val r = runCommand(psqlArgv(db), catalogScript)
+package func readLive(db: String, ns: String): Live {
+    val r = runCommand(psqlArgv(db), catalogScript(ns))
     if (r == null) {
         println("error: `psql` could not be started; is PostgreSQL's client on the path?")
         exit(1)
@@ -155,6 +158,7 @@ package func parseLive(text: String): Live {
                 if (t != null) { t.indexes.add(LiveIndex(f[2], f[3].split(","))) }
             }
             "V" -> { live.views.add(LiveView(f[1], f[2])) }
+            "S" -> { live.hasSchema = true }
             "F" -> { live.functions.add(LiveFunction(f[1], f[2], f[3], f[4], f[5])) }
             "G" -> { live.triggers.add(LiveTrigger(f[1], f[2], f[3], f[4], f[5])) }
             else -> {}

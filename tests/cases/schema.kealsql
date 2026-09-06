@@ -1,0 +1,38 @@
+// Every object of this file lives in its own schema.
+
+schema Billing
+
+enum Status { Open, Paid }
+
+table Customer {
+    id:   Id
+    name: Slug
+}
+
+table Invoice {
+    id:       Id
+    cascade customer: RefId<Customer>
+    status:   Status = Open
+    cents:    Int
+    indexed due: Date?
+}
+
+view Unpaid {
+    from(Invoice as i).where(i.status == Open).select(i.id as invoice, i.customer.name as customer, i.cents as cents)
+}
+
+func unpaidOf(name: String): List<(Int, Int)> {
+    from(Unpaid as u).where(u.customer == name).orderBy(u.invoice).select(u.invoice, u.cents)
+}
+
+func owed(): Int? {
+    from(Invoice).where(status == Open).select(sum(cents)).single()
+}
+
+proc pay(invoice: Int) {
+    update(Invoice).where(id == invoice).set(status = Paid)
+}
+
+func bill(customer: Int, cents: Int): Invoice {
+    insert(Invoice(customer = customer, cents = cents))
+}

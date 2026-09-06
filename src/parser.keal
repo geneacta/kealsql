@@ -122,6 +122,11 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 this.advance()
                 if (not this.at("str")) { this.failHere("expected a path after `import`") }
                 p.imports.add(this.advance().text)
+            } else if (this.atWord("schema") and this.peekAt(1).kind == "ident") {
+                val t = this.advance()
+                if (p.schema != "") { this.fail(t.line, t.col, "one `schema` per file") }
+                if (not p.tables.isEmpty() or not p.enums.isEmpty()) { this.fail(t.line, t.col, "`schema` comes before the tables") }
+                p.schema = this.expectIdent("a name after `schema`")
             } else if (this.atWord("table") and this.peekAt(1).kind == "ident") {
                 p.tables.add(this.tableDecl())
             } else if (this.atWord("renamed") and this.peekAt(1).kind == "(") {

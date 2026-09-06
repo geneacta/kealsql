@@ -172,7 +172,7 @@ Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
 
 ## Status
 
-v1 covers the schema (`table`, `enum`, keys, references, `on delete`,
+v1 covers the schema (`schema`, `table`, `enum`, keys, references, `on delete`,
 defaults, named checks, indexes, arrays, `Decimal`, `Timestamptz`, `Json`
 and the other common types), the DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 `orderBy` / `groupBy` / `distinct` / `limit` / `offset`, `fullJoin` /

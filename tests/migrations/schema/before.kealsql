@@ -1,0 +1,5 @@
+schema Billing
+table Customer {
+    id:   Id
+    name: Slug
+}

@@ -318,7 +318,7 @@ package func plkealSource(compiler: Compiler): String {
             out += "        fc->max_calls = (uint64)n;\n"
             out += "        fc->user_fctx = plkeal_out_keep(${ncols});\n"
             if (table != null) {
-                out += "        TupleDesc td = RelationNameGetTupleDesc(\"${snakeName(table.name)}\");\n"
+                out += "        TupleDesc td = RelationNameGetTupleDesc(\"${qualName(schema, table.name).replace("\"", "")}\");\n"
                 out += "        fc->tuple_desc = BlessTupleDesc(td);\n"
                 out += "        fc->attinmeta = TupleDescGetAttInMetadata(td);\n"
             }

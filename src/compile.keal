@@ -83,6 +83,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     // ---- schema -------------------------------------------------------
 
     package proc resolveSchema() {
+        this.schema.name = this.program.schema
         for (e in this.program.enums) {
             if (this.schema.enums.containsKey(e.name)) { this.fail(e.line, e.col, "enum `${e.name}` is declared twice") }
             if (e.values.isEmpty()) { this.fail(e.line, e.col, "enum `${e.name}` has no values") }
@@ -210,7 +211,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     package func indexDdl(table: Table, cols: List<String>): String {
         val tn = snakeName(table.name)
         val cn = cols.map({ snakeName(it) })
-        return "CREATE INDEX ${tn}_${cn.join("_")}_idx ON ${sqlName(table.name)} (${cn.map({ quoteIf(it) }).join(", ")});"
+        return "CREATE INDEX ${tn}_${cn.join("_")}_idx ON ${qualName(this.schema, table.name)} (${cn.map({ quoteIf(it) }).join(", ")});"
     }
 
     /// A stored function's signature: the four value types, none optional —
@@ -260,13 +261,13 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     package func storedArgs(s: StoredN): String { s.params.map({ this.storedSqlType(it.ty) }).join(", ") }
     package func storedResult(s: StoredN): String {
         val elem = this.storedElem(s)
-        val one = if (this.schema.tables.containsKey(elem.name)) { sqlName(elem.name) } else { this.storedSqlType(elem) }
+        val one = if (this.schema.tables.containsKey(elem.name)) { qualName(this.schema, elem.name) } else { this.storedSqlType(elem) }
         return if (this.storedSetof(s)) { "SETOF " + one } else { one }
     }
 
     package func storedFunctionDdl(s: StoredN): String {
         val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
-        var out = "CREATE OR REPLACE FUNCTION ${sqlName(s.name)}(${this.storedArgs(s)}) RETURNS ${this.storedResult(s)}\n"
+        var out = "CREATE OR REPLACE FUNCTION ${qualName(this.schema, s.name)}(${this.storedArgs(s)}) RETURNS ${this.storedResult(s)}\n"
         out += "    AS '${lib}', 'kealsql_${snakeName(s.name)}' LANGUAGE C STRICT${if (s.pure) { " IMMUTABLE" } else { "" }};"
         return out
     }
@@ -274,8 +275,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     package func triggerDdl(tr: TriggerN): List<String> {
         val lib = if (this.lib == "") { "$" + "libdir/" + this.libStem() } else { this.lib }
         val fn = "kealsql_trg_${snakeName(tr.name)}"
-        val f = "CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger\n    AS '${lib}', '${fn}' LANGUAGE C;"
-        val t = "CREATE OR REPLACE TRIGGER ${sqlName(tr.name)} ${tr.timing.toUpper()} ${tr.event.toUpper()} ON ${sqlName(tr.table)}\n    FOR EACH ROW EXECUTE FUNCTION ${fn}();"
+        val f = "CREATE OR REPLACE FUNCTION ${qual(this.schema, fn)}() RETURNS trigger\n    AS '${lib}', '${fn}' LANGUAGE C;"
+        val t = "CREATE OR REPLACE TRIGGER ${sqlName(tr.name)} ${tr.timing.toUpper()} ${tr.event.toUpper()} ON ${qualName(this.schema, tr.table)}\n    FOR EACH ROW EXECUTE FUNCTION ${qual(this.schema, fn)}();"
         return [f, t]
     }
 
@@ -441,12 +442,13 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     func ddl(): String {
         var out = ""
+        if (this.schema.name != "") { out += "CREATE SCHEMA IF NOT EXISTS ${quoteIf(snakeName(this.schema.name))};\n\n" }
         for (e in this.program.enums) {
-            out += "CREATE TYPE ${sqlName(e.name)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});\n\n"
+            out += "CREATE TYPE ${qualName(this.schema, e.name)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});\n\n"
         }
         for (name in this.tableOrder()) {
             val t = this.schema.tables[name]!!
-            out += "CREATE TABLE ${sqlName(t.name)} (\n"
+            out += "CREATE TABLE ${qualName(this.schema, t.name)} (\n"
             val lines: List<String> = []
             for (c in t.columns) { lines.add("    " + this.columnDdl(c)) }
             for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
@@ -461,7 +463,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     package func viewDdl(v: Table): String {
         val sql = v.viewSql.replace("\n", "\n    ")
-        return "CREATE VIEW ${sqlName(v.name)} AS\n    ${sql};\nCOMMENT ON VIEW ${sqlName(v.name)} IS '${this.fingerprint(v.viewSql)}';\n"
+        return "CREATE VIEW ${qualName(this.schema, v.name)} AS\n    ${sql};\nCOMMENT ON VIEW ${qualName(this.schema, v.name)} IS '${this.fingerprint(v.viewSql)}';\n"
     }
 
     package func columnDdl(c: Column): String {
@@ -474,7 +476,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         }
         if (c.default != "") { s += " DEFAULT ${c.default}" }
         if (c.refTable != "") {
-            s += " REFERENCES ${sqlName(c.refTable)}(${sqlName(c.refColumn)}) ON DELETE ${c.onDelete}"
+            s += " REFERENCES ${qualName(this.schema, c.refTable)}(${sqlName(c.refColumn)}) ON DELETE ${c.onDelete}"
             if (c.onUpdate != "") { s += " ON UPDATE ${c.onUpdate}" }
         }
         return s
@@ -740,9 +742,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return s
     }
 
+    /// A table in FROM, in its schema; a recursive binding has none. Without
+    /// an alias, columns are reached by the bare table name, which SQL allows.
     func fromClause(s: Src): String {
-        if (s.alias == s.table.name) { return sqlName(s.table.name) }
-        return "${sqlName(s.table.name)} AS ${s.sqlAlias}"
+        val name = if (this.cteTables.containsKey(s.table.name)) { sqlName(s.table.name) } else { qualName(this.schema, s.table.name) }
+        if (s.alias == s.table.name) { return name }
+        return "${name} AS ${s.sqlAlias}"
     }
 
     proc walkSelect(steps: List<Ex>, var plan: Plan) {
@@ -1082,7 +1087,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             else if (named.join(",") != cols.join(",")) { this.fail(row.line, row.col, "every row of one `insert` names the same columns, in the same order") }
             rows.add("(${vals.join(", ")})")
         }
-        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.map({ sqlName(it) }).join(", ")})\nVALUES ${rows.join(",\n       ")}"
+        var sql = "INSERT INTO ${qualName(this.schema, t.name)} (${cols.map({ sqlName(it) }).join(", ")})\nVALUES ${rows.join(",\n       ")}"
         // ---- the conflict clause
         var i = 1
         if (i < steps.size) {
@@ -1170,7 +1175,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         }
         val missing = t.columns.filter({ not it.isSerial and not it.optional and it.default == "" and not plan.selectNames.contains(it.name) }).map({ it.name })
         unless (missing.isEmpty()) { this.fail(root.line, root.col, "`${t.name}` needs `${missing.join("`, `")}`; select a value for each") }
-        var sql = "INSERT INTO ${sqlName(t.name)} (${cols.join(", ")})\n${this.withCtes(this.renderSelect(plan))}"
+        var sql = "INSERT INTO ${qualName(this.schema, t.name)} (${cols.join(", ")})\n${this.withCtes(this.renderSelect(plan))}"
         if (returning) { sql += "\nRETURNING *" }
         return [sql, t.name]
     }
@@ -1421,7 +1426,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         s.sqlAlias = sqlAlias
         s.optional = col.optional or from.optional
         val word = if (col.optional) { "LEFT JOIN" } else { "JOIN" }
-        val named = if (sqlAlias == sqlName(target.name)) { sqlAlias } else { "${sqlName(target.name)} AS ${sqlAlias}" }
+        val named = if (sqlAlias == sqlName(target.name)) { qualName(this.schema, target.name) } else { "${qualName(this.schema, target.name)} AS ${sqlAlias}" }
         s.joinSql = "${word} ${named} ON ${from.sqlAlias}.${sqlName(col.name)} = ${sqlAlias}.${sqlName(col.refColumn)}"
         plan.sources.add(s)
         return s
@@ -1716,7 +1721,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             sqls.add(v.sql)
             i += 1
         }
-        return Val("${sqlName(s.name)}(${sqls.join(", ")})", Ty(s.ret!!.name, opt))
+        return Val("${qualName(this.schema, s.name)}(${sqls.join(", ")})", Ty(s.ret!!.name, opt))
     }
 
     func binary(e: Ex, var plan: Plan): Val {

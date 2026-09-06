@@ -77,7 +77,7 @@ if (plkealDir != "") {
     for (w in writePlkeal(compiler, plkealDir)) { println(w) }
 } else if (migrate) {
     compiler.resolveSchema()
-    print(Migration(compiler, readLive(db), destructive).run())
+    print(Migration(compiler, readLive(db, schemaRaw(compiler.schema)), destructive).run())
 } else {
     print(compiler.compile())
 }

@@ -1,0 +1,17 @@
+schema Billing
+enum Status { Open, Paid }
+table Customer {
+    id:    Id
+    name:  Slug
+    since: Date?
+}
+table Invoice {
+    id:       Id
+    cascade customer: RefId<Customer>
+    status:   Status = Open
+    cents:    Int
+    indexed due: Date?
+}
+view Unpaid {
+    from(Invoice as i).where(i.status == Open).select(i.id as invoice, i.cents as cents)
+}

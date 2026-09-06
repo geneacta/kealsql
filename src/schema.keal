@@ -44,6 +44,7 @@ package class Table(package val name: String, package val decl: TableN) {
 }
 
 package class Schema() {
+    package var name: String = ""            // the PostgreSQL schema; "" is public
     package var enums: Map<String, EnumN> = {}
     package var tables: Map<String, Table> = {}
     package var tableOrder: List<String> = []
@@ -91,7 +92,7 @@ package func sqlTypeScaled(scalar: String, len: Int, scale: Int, schema: Schema)
         "Json" -> "json"
         "Jsonb" -> "jsonb"
         "Inet" -> "inet"
-        else -> if (schema.isEnum(scalar)) { sqlName(scalar) } else { scalar.toLower() }
+        else -> if (schema.isEnum(scalar)) { qualName(schema, scalar) } else { scalar.toLower() }
     }
 }
 
@@ -140,3 +141,15 @@ package func quoteIf(raw: String): String {
     if (isSqlReserved(raw)) { return "\"" + raw + "\"" }
     return raw
 }
+
+/// A catalog name of a table, type or function, in its schema: `billing.post`.
+package func qual(schema: Schema, raw: String): String {
+    if (schema.name == "") { return quoteIf(raw) }
+    return "${quoteIf(snakeName(schema.name))}.${quoteIf(raw)}"
+}
+
+/// A declared table, enum, view or function name, qualified: `qual(snakeName(name))`.
+package func qualName(schema: Schema, name: String): String { qual(schema, snakeName(name)) }
+
+/// The schema's own name as the catalog holds it.
+package func schemaRaw(schema: Schema): String { if (schema.name == "") { "public" } else { snakeName(schema.name) } }
