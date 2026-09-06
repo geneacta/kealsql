@@ -137,15 +137,19 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 p.tables.add(t)
             } else if (this.atWord("enum") and this.peekAt(1).kind == "ident") {
                 p.enums.add(this.enumDecl())
-            } else if (this.atWord("view") and this.peekAt(1).kind == "ident") {
+            } else if ((this.atWord("view") and this.peekAt(1).kind == "ident") or (this.atWord("materialized") and this.peekAt(1).kind == "ident" and this.peekAt(1).text == "view")) {
                 val t = this.advance()
+                var materialized = false
+                if (t.text == "materialized") { this.advance(); materialized = true }
                 val name = this.expectIdent("a name after `view`")
                 this.expect("{", "to open the view's query")
                 this.skipSemis()
                 val body = this.expr()
                 this.skipSemis()
                 this.expect("}", "to close the view")
-                p.views.add(ViewN(name, body, t.line, t.col))
+                val v = ViewN(name, body, t.line, t.col)
+                v.materialized = materialized
+                p.views.add(v)
             } else if (this.atWord("trigger") and this.peekAt(1).kind == "ident") {
                 p.triggers.add(this.triggerDecl())
             } else if (this.atWord("stored") and (this.peekAt(1).kind == "func" or this.peekAt(1).kind == "proc" or (this.peekAt(1).kind == "ident" and this.peekAt(1).text == "pure"))) {

@@ -38,6 +38,7 @@ package class Table(package val name: String, package val decl: TableN) {
     package var hasId: Bool = false          // declared with the `Id` shorthand
     package var hasSlug: Bool = false        // declared with the `Slug` shorthand
     package var isView: Bool = false         // a `view`, or a recursive binding: columns, no keys
+    package var materialized: Bool = false   // a `materialized view`
     package var viewSql: String = ""         // the view's SELECT
 
     package func column(name: String): Column? { this.columns.find({ it.name == name }) }

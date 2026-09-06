@@ -11,3 +11,7 @@ CREATE VIEW stocked AS
     FROM product
     WHERE product.stock > 0;
 COMMENT ON VIEW stocked IS 'kealsql:745962133';
+CREATE MATERIALIZED VIEW counted AS
+    SELECT count(*) AS products
+    FROM product;
+COMMENT ON MATERIALIZED VIEW counted IS 'kealsql:154568002';

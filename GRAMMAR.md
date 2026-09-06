@@ -34,7 +34,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `primary` `slug` `unique` `cascade` `restrict` `setNull` | before a column name, inside a `table` |
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
-| `view` | before a name: `view Name { pipeline }` |
+| `view` `materialized` | before a name: `view Name { pipeline }`, `materialized view Name { … }` |
 | `schema` | `schema Name`, once, before the tables: every object of the file lives in that PostgreSQL schema |
 | `trigger` `on` `before` `after` | `trigger name on Table before|after insert|update|delete { ...Keal... }` |
 | `as` | `Table as t` in `from` / `join`; `expr as name` in `select` |
@@ -49,7 +49,7 @@ too. A column may be called `select` if its author insists.
 ```
 File          = ( "schema" Ident )? Item* ;
 Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl ;
-ViewDecl      = "view" Ident "{" Pipeline "}" ;          (* ends in select, names its columns *)
+ViewDecl      = "materialized"? "view" Ident "{" Pipeline "}" ;   (* ends in select, names its columns *)
 
 Import        = "import" String ( "as" Ident )? ;
 EnumDecl      = "enum" Ident "{" Ident ( "," Ident )* ","? "}" ;
@@ -212,7 +212,8 @@ Mutation      = "insert" "(" Row ( "," Row )* ")" ( "." "onConflict" "(" Ident (
               | "insertInto" "(" Ident "," Pipeline ")"   (* the query's columns, by name, into the table *)
               | "update" "(" Source ")" ( "." ( "join" "(" Source "," Expr ")" | "where" "(" Expr ")" ) )* "." "set" "(" NamedArgs ")"
               | "delete" "(" Source ")" ( "." ( "join" "(" Source "," Expr ")" | "where" "(" Expr ")" ) )*
-              | "sql" "(" String ")" ;                     (* the escape hatch: SQL as written *)
+              | "sql" "(" String ")"                       (* the escape hatch: SQL as written *)
+              | "refresh" "(" Ident ")" ;                  (* a materialized view, brought up to date *)
 Source        = Ident ( "as" Ident )? ;
 Row           = Ident "(" NamedArgs ")" ;
 NamedArgs     = Ident "=" Expr ( "," Ident "=" Expr )* ;
@@ -235,7 +236,11 @@ the row that was not inserted and `Table.col` the one that is there.
 
 A `view` is a pipeline with a name: its `select` names its columns (`as`
 where an expression has no name of its own), and it is a source like a
-table — one without keys, that no reference may point at. `recursive(base,
+table — one without keys, that no reference may point at. A
+`materialized view` is the same, stored: `refresh(Name)` in a `proc`
+brings it up to date — a utility statement, which PREPARE refuses, so the
+SQL output prints it as a comment to run as it is, and a stored function
+runs it through SPI. `recursive(base,
 step)` bound with `val` is a recursive common table expression: the base
 select names and types the columns, the step names the binding as a source
 and selects the same columns, and the pipeline that follows reads it as a
@@ -267,6 +272,7 @@ INSERT, UPDATE, DELETE, WITH, VALUES, MERGE.
 | `sql("SELECT …")` | as written |
 | `trigger t on T before insert { … }` | `CREATE OR REPLACE FUNCTION kealsql_trg_t() RETURNS trigger …; CREATE OR REPLACE TRIGGER t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION kealsql_trg_t()` |
 | `view V { … }` | `CREATE VIEW v AS SELECT …; COMMENT ON VIEW v IS 'kealsql:<fingerprint>'` |
+| `materialized view V { … }` / `refresh(V)` | `CREATE MATERIALIZED VIEW …` / `REFRESH MATERIALIZED VIEW v` |
 | `val t = recursive(base, step)` | `WITH RECURSIVE t(cols) AS (base UNION ALL step)` before the statement |
 | `insertInto(T, q)` | `INSERT INTO t (cols) SELECT …` |
 | `update(P as p).join(U as u, c).where(w).set(…)` | `UPDATE p SET … FROM u WHERE c AND w` |
@@ -397,6 +403,9 @@ left join, and the type of the result says which happened.
 | `json("{…}")` | a `Jsonb` literal |
 | `j.get(key)`, `j.at(i)`, `j.text(key)`, `j.hasKey(key)`, `j.contains(json(…))` | `->`, `->`, `->>` (`String?`), `?`, `@>` on a `Json` / `Jsonb` |
 | a `Bool3` in a `select` | leaves the query as a `Bool?`: unknown is null in a row |
+| `bytes("6b65616c")` | a `Bytea` literal, from hex |
+| `b.length`, `b.hex()`, `b.base64()`, `b.toText()`, `s.toBytes()` | `octet_length`, `encode(…, 'hex')`, `encode(…, 'base64')`, `convert_from(…, 'UTF8')`, `convert_to(…, 'UTF8')` |
+| `s.length` | characters of a `String` |
 | `a <==> b` | `Bool`, "does the order separate them" — an `Ord` question, kept for symmetry with Keal; rarely useful in SQL |
 
 `where(p)` and `unless(p)` accept `Bool` or `Bool3`. On `Bool3` the emitted

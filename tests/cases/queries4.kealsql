@@ -1,0 +1,32 @@
+// Materialized views, refresh, and bytes.
+
+table Product {
+    id:    Id
+    sku:   Slug
+    price: Decimal(10, 2)
+    blob:  Bytea?
+}
+
+materialized view PriceBands {
+    from(Product).groupBy(price > 50).select(price > 50 as dear, count(*) as products)
+}
+
+func bands(): List<(Bool, Int)> {
+    from(PriceBands as b).orderBy(b.dear).select(b.dear, b.products)
+}
+
+proc refreshBands() {
+    refresh(PriceBands)
+}
+
+proc stamp(sku: String, hex: String) {
+    update(Product).where(Product.sku == sku).set(blob = hex.toBytes())
+}
+
+func blobs(): List<(String, Int?, String?, String?)> {
+    from(Product).where(blob != null).orderBy(sku).select(sku, blob?.length, blob?.hex(), blob?.toText())
+}
+
+func stamped(): List<String> {
+    from(Product).where(blob == bytes("6b65616c")).select(sku)
+}

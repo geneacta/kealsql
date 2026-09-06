@@ -28,7 +28,7 @@ package class LiveTable(package val name: String) {
 
 /// A view, by name, with the fingerprint KealSql left as its comment ("" when
 /// it was not KealSql that made it).
-package class LiveView(package val name: String, package val fingerprint: String)
+package class LiveView(package val name: String, package val fingerprint: String, package val materialized: Bool)
 
 /// A function KealSql made (its C symbol is `kealsql_...`), and a trigger.
 package class LiveFunction(package val name: String, package val args: String, package val result: String, package val lib: String, package val symbol: String)
@@ -71,9 +71,9 @@ SELECT 'K', c.relname, k.contype, k.conname,
 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
 WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname, k.conname;
-SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), '')
+SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), ''), c.relkind
 FROM pg_class c
-WHERE c.relkind = 'v' AND c.relnamespace = 'NS'::regnamespace
+WHERE c.relkind IN ('v', 'm') AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname;
 SELECT 'F', p.proname, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), coalesce(p.probin, ''), p.prosrc
 FROM pg_proc p
@@ -157,7 +157,7 @@ package func parseLive(text: String): Live {
                 val t = live.tables[f[1]]
                 if (t != null) { t.indexes.add(LiveIndex(f[2], f[3].split(","))) }
             }
-            "V" -> { live.views.add(LiveView(f[1], f[2])) }
+            "V" -> { live.views.add(LiveView(f[1], f[2], f[3] == "m")) }
             "S" -> { live.hasSchema = true }
             "F" -> { live.functions.add(LiveFunction(f[1], f[2], f[3], f[4], f[5])) }
             "G" -> { live.triggers.add(LiveTrigger(f[1], f[2], f[3], f[4], f[5])) }

@@ -39,6 +39,7 @@ package class QueryInfo(package val name: String, package val isFunc: Bool) {
     package var colTys: List<Ty> = []
     package var colNames: List<String> = []
     package var rowTable: String = ""        // when the columns are one table's row
+    package var utility: Bool = false        // a statement PREPARE refuses; run as is
 }
 
 /// The pieces of one SELECT, gathered while walking the pipeline.
@@ -125,6 +126,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         if (plan.selectTys.size == 1 and plan.selectTys[0].name.startsWith("row:")) { this.fail(v.body.line, v.body.col, "a view names its columns; `select(*)` would take a table's") }
         val t = this.syntheticTable(v.name, plan.selectNames, plan.selectTys, v.line, v.col)
         t.isView = true
+        t.materialized = v.materialized
         t.viewSql = this.renderSelect(plan)
         this.schema.tables.set(v.name, t)
         this.schema.viewOrder.add(v.name)
@@ -461,9 +463,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return out
     }
 
+    package func viewKind(v: Table): String { if (v.materialized) { "MATERIALIZED VIEW" } else { "VIEW" } }
+
     package func viewDdl(v: Table): String {
         val sql = v.viewSql.replace("\n", "\n    ")
-        return "CREATE VIEW ${qualName(this.schema, v.name)} AS\n    ${sql};\nCOMMENT ON VIEW ${qualName(this.schema, v.name)} IS '${this.fingerprint(v.viewSql)}';\n"
+        val kind = this.viewKind(v)
+        return "CREATE ${kind} ${qualName(this.schema, v.name)} AS\n    ${sql};\nCOMMENT ON ${kind} ${qualName(this.schema, v.name)} IS '${this.fingerprint(v.viewSql)}';\n"
     }
 
     package func columnDdl(c: Column): String {
@@ -575,6 +580,18 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 info.kind = if (f.isFunc) { "row" } else { "none" }
                 info.rowTable = r[1]
             }
+            "refresh" -> {
+                // REFRESH MATERIALIZED VIEW: a utility statement, which PREPARE refuses. It is
+                // printed as is, and a stored function runs it through SPI.
+                if (steps.size > 1) { this.fail(steps[1].line, steps[1].col, "nothing follows `refresh(...)`") }
+                if (root.args.size != 1 or root.args[0].value.kind != "ident") { this.fail(root.line, root.col, "`refresh` takes a materialized view: `refresh(Name)`") }
+                val mv = this.schema.tables[root.args[0].value.text]
+                if (mv == null or not mv.materialized) { this.fail(root.line, root.col, "`${root.args[0].value.text}` is not a materialized view") }
+                if (f.isFunc) { this.fail(root.line, root.col, "`refresh` answers nothing; it is a `proc`") }
+                sql = "REFRESH MATERIALIZED VIEW ${qualName(this.schema, mv.name)}"
+                info.kind = "none"
+                info.utility = true
+            }
             "insertInto" -> {
                 val r = this.compileInsertInto(root, steps, f.isFunc)
                 sql = r[0]; produced = r[1]
@@ -619,6 +636,9 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         var header = "-- ${sig}${if (ret != null) { ": " + ret.render() } else { "" }}\n"
         for (w in this.warnings) { header += "-- ${w}\n" }
         // PostgreSQL refuses `PREPARE name() AS`: the parentheses go with the parameters.
+        if (info.utility) {
+            return "${header}-- a utility statement, which PREPARE refuses: run it as it is\n-- ${sql};\n"
+        }
         val types = if (this.params.isEmpty()) { "" } else { "(${this.params.map({ it.sqlType }).join(", ")})" }
         return "${header}PREPARE ${sqlName(f.name)}${types} AS\n${sql};\n"
     }
@@ -947,6 +967,11 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     /// The SQL of the first column in `e` that is not grouped by; "" if none.
     func ungrouped(e: Ex, var plan: Plan): String {
+        // An expression grouped by as a whole — `groupBy(price > 50)` — is fine wherever it appears.
+        if (e.kind != "ident" and e.kind != "field" and e.kind != "named") {
+            if (plan.groupBy.contains(this.emit(e, plan).sql)) { return "" }
+        }
+        if (e.kind == "named") { return this.ungrouped(e.kids[0], plan) }
         if (e.kind == "ident" or e.kind == "field") {
             val v = this.emit(e, plan)
             if (v.col != null and not plan.groupBy.contains(v.sql)) { return v.sql }
@@ -1387,9 +1412,15 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             }
         }
         val base = this.emit(recv, plan)
-        if (base.ty.name.endsWith("[]") and e.text == "size" and not e.safe) {
+        val safeOk = not e.safe or base.ty.optional            // `?.` on a property of an optional value
+        if (base.ty.name.endsWith("[]") and e.text == "size" and safeOk) {
             // `.size` of an array, a property as Keal spells it.
             return Val("cardinality(${base.sql})", Ty("Int", base.ty.optional))
+        }
+        if ((base.ty.name == "Bytea" or base.ty.name == "String") and e.text == "length" and safeOk) {
+            // `.length`, as Keal spells it: bytes of a Bytea, characters of a String.
+            val fn = if (base.ty.name == "Bytea") { "octet_length" } else { "length" }
+            return Val("${fn}(${base.sql})", Ty("Int", base.ty.optional))
         }
         val col = base.col
         val src = base.src
@@ -1537,6 +1568,21 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 }
                 return Val("${recv.sql} + make_interval(${unit} => ${args[0].sql})", Ty(recv.ty.name, opt))
             }
+            "hex", "base64", "toText" -> {
+                this.argCount(e, 0)
+                this.needs(e, recv, "Bytea")
+                val sql = when (e.text) {
+                    "hex" -> "encode(${recv.sql}, 'hex')"
+                    "base64" -> "encode(${recv.sql}, 'base64')"
+                    else -> "convert_from(${recv.sql}, 'UTF8')"
+                }
+                return Val(sql, Ty("String", recv.ty.optional))
+            }
+            "toBytes" -> {
+                this.argCount(e, 0)
+                this.needs(e, recv, "String")
+                return Val("convert_to(${recv.sql}, 'UTF8')", Ty("Bytea", recv.ty.optional))
+            }
             "get", "at", "text", "hasKey" -> {
                 val isJson = recv.ty.name == "Json" or recv.ty.name == "Jsonb"
                 unless (isJson) { this.fail(e.line, e.col, "`${e.text}` is asked of a `Json` or `Jsonb`, not a `${this.renderTy(recv.ty)}`") }
@@ -1645,6 +1691,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     func call(e: Ex, var plan: Plan): Val {
         when (e.text) {
             "now" -> { this.argCount(e, 0); return this.lit("now()", "Timestamptz") }
+            "bytes" -> {
+                // `bytes("cafe")`: a Bytea literal, from hex.
+                this.argCount(e, 1)
+                if (e.args[0].value.kind != "str") { this.fail(e.line, e.col, "`bytes` takes a string literal of hex digits") }
+                return this.lit("'\\x${e.args[0].value.text}'::bytea", "Bytea")
+            }
             "json" -> {
                 // `json("{...}")`: a Jsonb literal.
                 this.argCount(e, 1)

@@ -10,3 +10,6 @@ view Cheap {
 view Stocked {
     from(Product).where(stock > 0).select(sku, stock)
 }
+materialized view Counted {
+    from(Product).select(count(*) as products)
+}

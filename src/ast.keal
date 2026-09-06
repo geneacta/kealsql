@@ -103,7 +103,9 @@ package class Ex(package val kind: String, package val line: Int, package val co
 }
 
 /// `view Name { pipeline }`: a query with a name in the database.
-package class ViewN(package val name: String, package val body: Ex, package val line: Int, package val col: Int)
+package class ViewN(package val name: String, package val body: Ex, package val line: Int, package val col: Int) {
+    package var materialized: Bool = false   // `materialized view`: stored, refreshed on demand
+}
 
 /// `trigger name on Table before|after insert|update|delete { ...Keal... }`.
 package class TriggerN(package val name: String, package val table: String, package val line: Int, package val col: Int) {

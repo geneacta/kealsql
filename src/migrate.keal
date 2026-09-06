@@ -229,14 +229,14 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val vn = snakeName(name)
             val live = this.live.views.find({ it.name == vn })
             if (live == null) { changed.add(name); continue }
-            if (live.fingerprint != this.compiler.fingerprint(v.viewSql)) {
+            if (live.fingerprint != this.compiler.fingerprint(v.viewSql) or live.materialized != v.materialized) {
                 if (live.fingerprint == "") { this.note("view `${vn}` was not made by KealSql; it is replaced") }
-                this.add("DROP VIEW ${qual(schema, vn)};")
+                this.add("DROP ${if (live.materialized) { "MATERIALIZED VIEW" } else { "VIEW" }} ${qual(schema, vn)};")
                 changed.add(name)
             }
         }
         for (lv in this.live.views) {
-            unless (declared.contains(lv.name)) { this.add("DROP VIEW ${qual(schema, lv.name)};") }
+            unless (declared.contains(lv.name)) { this.add("DROP ${if (lv.materialized) { "MATERIALIZED VIEW" } else { "VIEW" }} ${qual(schema, lv.name)};") }
         }
         for (name in schema.viewOrder) {
             if (changed.contains(name)) { this.add(this.compiler.viewDdl(schema.tables[name]!!).trim()) }
