@@ -78,7 +78,7 @@ def band():
     files = "https://github.com/geneacta/kealsql/tree/main/src"
     return "\n".join([
         START,
-        '<p align="center">',
+        '<p align="right">',        # the layout the README chose: the band above the logo, on the right
         '  <a href="%s"><img alt="version" src="%s"></a>' % (releases, SHIELD % ("version", version())),
         '  <a href="%s"><img alt="written in Keal" src="%s"></a>' % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share)),
         "</p>",
