@@ -807,7 +807,7 @@ package func plkealBuildScript(stem: String): String {
     s += "cd \"$(dirname \"$0\")\"\n"
     s += "KEAL=\"$" + "{KEAL:-keal}\"\n"
     s += "\"$" + "KEAL\" emit-c ${stem}.keal > ${stem}.c\n"
-    s += "$" + "{CC:-cc} -shared -fPIC -O2 -std=gnu11 -D_GNU_SOURCE -I\"$(pg_config --includedir-server)\" -o ${stem}.so ${stem}.c\n"
+    s += "$" + "{CC:-cc} -shared -fPIC -O2 -std=gnu11 -Wall -D_GNU_SOURCE -I\"$(pg_config --includedir-server)\" -o ${stem}.so ${stem}.c\n"
     s += "echo \"${stem}.so\"\n"
     return s
 }

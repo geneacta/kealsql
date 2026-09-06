@@ -121,6 +121,11 @@ for f in tests/plkeal/*.kealsql; do
     if ! KEAL="$KEAL" sh "$out/build.sh" > "$PGDIR/build.log" 2>&1; then
         echo "FAIL $f: the library does not build"; grep -E "error" "$PGDIR/build.log" | head -5; failed=1; continue
     fi
+    # The C compiler speaks: a warning in KealSql's own C (the bridges and entry
+    # points, named plkeal_ / kealsql_) is a defect, not noise.
+    if grep -A1 "warning:" "$PGDIR/build.log" | grep -qE "plkeal_|kealsql_"; then
+        echo "FAIL $f: the library's C warns"; grep -A1 "warning:" "$PGDIR/build.log" | grep -E "plkeal_|kealsql_" | head -5; failed=1; continue
+    fi
     $PSQL -d postgres -c "CREATE DATABASE plk_$name" > /dev/null
     "$KEAL" src/main.keal --lib "$out/$name.so" "$f" > "$out/$name.sql"
     exp="${f%.kealsql}.exec.out"
@@ -149,6 +154,9 @@ for app in tests/client/*_app.keal; do
     cp "$app" "tests/cases/$name.kealsql" "$dir/"
     if ! "$KEAL" build "$dir/$(basename "$app")" -I"$PGLIBINC" -lpq -o "$dir/app" > "$dir/build.log" 2>&1; then
         echo "FAIL $app: does not build"; grep -E "error" "$dir/build.log" | head -5; failed=1; continue
+    fi
+    if grep -A1 "warning:" "$dir/build.log" | grep -qE "kc_|kealsql_"; then
+        echo "FAIL $app: the client's C warns"; grep -A1 "warning:" "$dir/build.log" | grep -E "kc_|kealsql_" | head -5; failed=1; continue
     fi
     $PSQL -d postgres -c "CREATE DATABASE client_$name" > /dev/null
     $PSQL -d "client_$name" -f "tests/cases/$name.sql" > /dev/null 2>&1
