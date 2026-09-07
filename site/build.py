@@ -275,7 +275,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
         "lang": lang, "title": html.escape(title), "desc": html.escape(description), "prefix": prefix,
         "canonical": BASE_URL + ("" if lang == "en" else "fr/") + filename,
         "alt_en": BASE_URL + filename, "alt_fr": BASE_URL + "fr/" + filename,
-        "locale": "en_GB" if lang == "en" else "fr_FR", "image": BASE_URL + "assets/kealsql.png",
+        "locale": "en_GB" if lang == "en" else "fr_FR", "image": BASE_URL + "assets/k.png",
         "links": "".join(nav_links), "version": VERSION, "other": other, "other_label": SWITCH[lang],
         "keal": "https://geneacta.github.io/keal/" + ("" if lang == "en" else "fr/"),
         "body": layout, "foot0": foot[0], "foot1": foot[1], "foot2": foot[2], "foot3": foot[3],
