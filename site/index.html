@@ -20,17 +20,20 @@
 <meta name="twitter:title" content="KealSql — Keal&#x27;s shape over PostgreSQL">
 <meta name="twitter:description" content="A Keal-shaped language over an unmodified PostgreSQL: schema and queries type-checked together, compiled ahead of time to SQL, migrations from a diff, and Keal running inside the server.">
 <meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
-<link rel="icon" type="image/png" href="assets/kealsql.png">
+<link rel="icon" type="image/png" href="assets/k.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a href="index.html"><img class="nav-logo" src="assets/kealsql.png" alt="KealSql"></a>
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="assets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">sql</span></span>
+    </a>
     <div class="nav-links"><a href="index.html" class="tab-active">Home</a><a href="start.html">Getting started</a><a href="walkthrough.html">Step by step</a><a href="docs.html">Docs</a></div>
   </div>
   <div class="nav-right">
@@ -49,7 +52,7 @@
     <a class="btn-primary" href="start.html">Create a database →</a>
     <a class="btn-ghost" href="docs.html">Read the docs</a>
   </div>
-  <div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span><span class="run">▶ what editorOf compiles to</span></div><pre>table User {
+  <div class="cwin"><div class="cwin-bar"><div class="cwin-tabs"><span class="tab on">blog.kealsql</span><span class="tab">▸ sql</span></div></div><pre>table User {
     id:      Id
     name:    Slug
     unique email: String
@@ -75,13 +78,13 @@ func byAuthor(name: String): List&lt;(Int, String)&gt; {
 
 func editorOf(post: Int): String? {
     from(Post).where(id == post).select(editor?.name).first()
-}</pre><div class="cwin-out"><pre>-- func editorOf(post: Int): String?
-PREPARE editor_of(integer) AS
-SELECT editor.name
-FROM post
-LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
-WHERE post.id = $1
-LIMIT 1;</pre></div></div>
+}</pre><div class="cwin-sql"><pre><span class="cm">-- func editorOf(post: Int): String?</span>
+<span class="kw">PREPARE</span> editor_of(integer) <span class="kw">AS</span>
+<span class="kw">SELECT</span> editor.name
+<span class="kw">FROM</span> post
+<span class="kw">LEFT <span class="kw">JOIN</span></span> &quot;user&quot; <span class="kw">AS</span> editor <span class="kw">ON</span> post.editor = editor.id
+<span class="kw">WHERE</span> post.id = $1
+<span class="kw">LIMIT</span> 1;</pre></div></div>
 </section>
 <section class="cards"><div class="card"><h3>Null safety against the schema</h3><p><code>String</code> is <code>NOT NULL</code>, <code>String?</code> is nullable, and <code>?.</code> through a reference is a <code>LEFT JOIN</code>. The type of the result says which join happened.</p></div><div class="card"><h3>Three-valued logic, made visible</h3><p><code>Bool3</code> appears only when an operand is nullable. The compiler tells you where a <code>==</code> can be <em>unknown</em> — and <code>===</code> treats null as a value.</p></div><div class="card"><h3>Migrations from a diff</h3><p>The file is the schema. <code>--migrate</code> reads the live catalog and prints what brings it to the file; destructive steps are held back until you say so.</p></div><div class="card"><h3>Keal inside the server</h3><p><code>stored func</code> and <code>trigger</code> bodies are Keal, compiled through C into <code>LANGUAGE C</code> functions — the fastest kind PostgreSQL has — calling the file's own queries, typed.</p></div><div class="card"><h3>The same queries from a program</h3><p>A Keal program imports the <code>.kealsql</code> itself and gets one typed method per query on a libpq connection. The application never writes SQL, and a renamed column stops it compiling.</p></div></section>
 <section class="band">

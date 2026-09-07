@@ -20,17 +20,20 @@
 <meta name="twitter:title" content="KealSql — la forme de Keal sur PostgreSQL">
 <meta name="twitter:description" content="Un langage à la forme de Keal sur un PostgreSQL non modifié : schéma et requêtes vérifiés ensemble, compilés à l&#x27;avance en SQL, migrations par diff, et du Keal qui tourne dans le serveur.">
 <meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
-<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/k.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="../assets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">sql</span></span>
+    </a>
     <div class="nav-links"><a href="index.html" class="tab-active">Accueil</a><a href="start.html">Premiers pas</a><a href="walkthrough.html">Pas à pas</a><a href="docs.html">Docs</a></div>
   </div>
   <div class="nav-right">
@@ -49,7 +52,7 @@
     <a class="btn-primary" href="start.html">Créer une base →</a>
     <a class="btn-ghost" href="docs.html">Lire les docs</a>
   </div>
-  <div class="cwin"><div class="cwin-bar"><span class="f">blog.kealsql</span><span class="run">▶ ce que editorOf devient</span></div><pre>table User {
+  <div class="cwin"><div class="cwin-bar"><div class="cwin-tabs"><span class="tab on">blog.kealsql</span><span class="tab">▸ sql</span></div></div><pre>table User {
     id:      Id
     name:    Slug
     unique email: String
@@ -75,13 +78,13 @@ func byAuthor(name: String): List&lt;(Int, String)&gt; {
 
 func editorOf(post: Int): String? {
     from(Post).where(id == post).select(editor?.name).first()
-}</pre><div class="cwin-out"><pre>-- func editorOf(post: Int): String?
-PREPARE editor_of(integer) AS
-SELECT editor.name
-FROM post
-LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
-WHERE post.id = $1
-LIMIT 1;</pre></div></div>
+}</pre><div class="cwin-sql"><pre><span class="cm">-- func editorOf(post: Int): String?</span>
+<span class="kw">PREPARE</span> editor_of(integer) <span class="kw">AS</span>
+<span class="kw">SELECT</span> editor.name
+<span class="kw">FROM</span> post
+<span class="kw">LEFT <span class="kw">JOIN</span></span> &quot;user&quot; <span class="kw">AS</span> editor <span class="kw">ON</span> post.editor = editor.id
+<span class="kw">WHERE</span> post.id = $1
+<span class="kw">LIMIT</span> 1;</pre></div></div>
 </section>
 <section class="cards"><div class="card"><h3>La null-safety contre le schéma</h3><p><code>String</code> est <code>NOT NULL</code>, <code>String?</code> est nullable, et <code>?.</code> à travers une référence est un <code>LEFT JOIN</code>. Le type du résultat dit quelle jointure a eu lieu.</p></div><div class="card"><h3>La logique ternaire, rendue visible</h3><p><code>Bool3</code> n'apparaît que si un opérande est nullable. Le compilateur dit où un <code>==</code> peut valoir <em>unknown</em> — et <code>===</code> traite null comme une valeur.</p></div><div class="card"><h3>Des migrations par diff</h3><p>Le fichier est le schéma. <code>--migrate</code> lit le catalogue et imprime ce qui amène la base au fichier ; les étapes destructives sont retenues jusqu'à ce que vous le disiez.</p></div><div class="card"><h3>Du Keal dans le serveur</h3><p>Les corps de <code>stored func</code> et de <code>trigger</code> sont du Keal, compilé via C en fonctions <code>LANGUAGE C</code> — les plus rapides que PostgreSQL connaisse — qui appellent les requêtes du fichier, typées.</p></div><div class="card"><h3>Les mêmes requêtes depuis un programme</h3><p>Un programme Keal importe le <code>.kealsql</code> lui-même et obtient une méthode typée par requête sur une connexion libpq. L'application n'écrit jamais de SQL, et une colonne renommée l'empêche de compiler.</p></div></section>
 <section class="band">

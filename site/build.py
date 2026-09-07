@@ -223,17 +223,20 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
 <meta name="twitter:title" content="%(title)s">
 <meta name="twitter:description" content="%(desc)s">
 <meta name="twitter:image" content="%(image)s">
-<link rel="icon" type="image/png" href="%(prefix)sassets/kealsql.png">
+<link rel="icon" type="image/png" href="%(prefix)sassets/k.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="%(prefix)sstyle.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a href="index.html"><img class="nav-logo" src="%(prefix)sassets/kealsql.png" alt="KealSql"></a>
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="%(prefix)sassets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">sql</span></span>
+    </a>
     <div class="nav-links">%(links)s</div>
   </div>
   <div class="nav-right">
@@ -279,6 +282,32 @@ def write(lang, filename, text):
 def read(rel):
     with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
         return f.read()
+
+
+SQL_KW = ("SELECT", "FROM", "WHERE", "LEFT JOIN", "JOIN", "ON", "AND", "OR", "NOT", "ORDER BY", "GROUP BY",
+          "LIMIT", "PREPARE", "AS", "CREATE TABLE", "CREATE TYPE", "CREATE VIEW", "INSERT INTO", "VALUES",
+          "UPDATE", "SET", "DELETE FROM", "RETURNING", "PRIMARY KEY", "REFERENCES", "NOT NULL", "UNIQUE",
+          "DEFAULT", "ON DELETE", "CASCADE", "SET NULL", "RESTRICT", "IS NULL", "DESC", "ASC", "COUNT")
+
+
+def sql_html(sql):
+    """SQL with its keywords and comments marked, for the second pane."""
+    out = []
+    for line in sql.split("\n"):
+        if line.startswith("--"):
+            out.append('<span class="cm">%s</span>' % html.escape(line))
+            continue
+        esc = html.escape(line)
+        for kw in SQL_KW:
+            esc = re.sub(r"(?<![\w\"])%s(?![\w\"])" % re.escape(kw), '<span class="kw">%s</span>' % kw, esc)
+        out.append(esc)
+    return "\n".join(out)
+
+
+def code_pair(title, code, sql):
+    """Two panes: what someone writes, then what PostgreSQL receives."""
+    return ('<div class="cwin"><div class="cwin-bar"><div class="cwin-tabs"><span class="tab on">%s</span><span class="tab">▸ sql</span></div></div>'
+            '<pre>%s</pre><div class="cwin-sql"><pre>%s</pre></div></div>') % (html.escape(title), html.escape(code), sql_html(sql))
 
 
 def code_window(title, code, output=None, run_label="Run"):
@@ -378,7 +407,7 @@ def landing(lang, S):
 </section>
 """ % {
         "pill": t["pill"], "h1": t["h1"], "sub": t["sub"], "cta1": t["cta1"], "cta2": t["cta2"],
-        "hero": code_window(t["hero_file"], S["hero"], S["hero_out"], t["hero_out"]),
+        "hero": code_pair(t["hero_file"], S["hero"], S["hero_out"]),
         "cards": cards, "ways_h": t["ways_h"], "ways_p": t["ways_p"], "chips": chips,
         "why_h": t["why_h"], "why_p": t["why_p"], "start_h": t["start_h"],
         "start": code_window("shell", SHELL["install"] + "\n" + SHELL["compile"] + "\n" + SHELL["createdb"]),
@@ -392,7 +421,7 @@ def start(lang, S):
     windows = {
         "install": code_window(t["shell"], SHELL["install"]),
         "blog": code_window("blog.kealsql", S["blog"]),
-        "compile": code_window(t["shell"], SHELL["compile"], S["compile_sql"], "blog.sql"),
+        "compile": code_pair(t["shell"], SHELL["compile"], S["compile_sql"]),
         "createdb": code_window(t["shell"], SHELL["createdb"]),
         "psql": code_window(t["shell"], SHELL["psql"], S["psql_rows"], "psql"),
         "client": code_window("app.keal", S["app"], S["app_out"], "PGDATABASE=blog ./app") + code_window(t["shell"], SHELL["client_build"]),

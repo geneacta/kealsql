@@ -20,17 +20,20 @@
 <meta name="twitter:title" content="Premiers pas — KealSql">
 <meta name="twitter:description" content="Créer une base PostgreSQL depuis un fichier .kealsql, l&#x27;utiliser depuis psql et depuis un programme Keal, la faire évoluer par migration, et exécuter du Keal dans le serveur.">
 <meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/kealsql.png">
-<link rel="icon" type="image/png" href="../assets/kealsql.png">
+<link rel="icon" type="image/png" href="../assets/k.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <div class="wrap">
 <nav class="nav">
   <div class="nav-left">
-    <a href="index.html"><img class="nav-logo" src="../assets/kealsql.png" alt="KealSql"></a>
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="../assets/k.png" alt="">
+      <span class="wordmark">keal<span class="suffix">sql</span></span>
+    </a>
     <div class="nav-links"><a href="index.html">Accueil</a><a href="start.html" class="tab-active">Premiers pas</a><a href="walkthrough.html">Pas à pas</a><a href="docs.html">Docs</a></div>
   </div>
   <div class="nav-right">
@@ -98,37 +101,37 @@ proc forget(user: RefId&lt;User&gt;) {
 </section>
 <section class="band" id="le-compiler"><h2>3. Le compiler</h2>
 <p class="lede">Le compilateur imprime du SQL — le schéma en instructions <code>CREATE</code>, puis un <code>PREPARE</code> par <code>func</code> ou <code>proc</code> :</p>
-<div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ blog.sql</span></div><pre>keal src/main.keal blog.kealsql &gt; blog.sql</pre><div class="cwin-out"><pre>CREATE TABLE &quot;user&quot; (
-    id serial PRIMARY KEY,
-    name text UNIQUE NOT NULL,
-    email text UNIQUE NOT NULL,
+<div class="cwin"><div class="cwin-bar"><div class="cwin-tabs"><span class="tab on">shell</span><span class="tab">▸ sql</span></div></div><pre>keal src/main.keal blog.kealsql &gt; blog.sql</pre><div class="cwin-sql"><pre><span class="kw">CREATE TABLE</span> &quot;user&quot; (
+    id serial <span class="kw">PRIMARY KEY</span>,
+    name text <span class="kw">UNIQUE</span> <span class="kw">NOT</span> NULL,
+    email text <span class="kw">UNIQUE</span> <span class="kw">NOT</span> NULL,
     bio text
 );
 
-CREATE TABLE post (
-    id serial PRIMARY KEY,
-    author integer NOT NULL REFERENCES &quot;user&quot;(id) ON DELETE CASCADE,
-    editor integer REFERENCES &quot;user&quot;(id) ON DELETE SET NULL,
-    title text NOT NULL,
-    status status NOT NULL,
-    created timestamp NOT NULL
+<span class="kw">CREATE TABLE</span> post (
+    id serial <span class="kw">PRIMARY KEY</span>,
+    author integer <span class="kw">NOT</span> NULL <span class="kw">REFERENCES</span> &quot;user&quot;(id) <span class="kw">ON</span> DELETE <span class="kw">CASCADE</span>,
+    editor integer <span class="kw">REFERENCES</span> &quot;user&quot;(id) <span class="kw">ON</span> DELETE <span class="kw">SET</span> NULL,
+    title text <span class="kw">NOT</span> NULL,
+    status status <span class="kw">NOT</span> NULL,
+    created timestamp <span class="kw">NOT</span> NULL
 );
 
--- func byAuthor(name: String): List&lt;(Int, String)&gt;
-PREPARE by_author(text) AS
-SELECT p.id, p.title
-FROM post AS p
-JOIN &quot;user&quot; AS author ON p.author = author.id
-WHERE author.name = $1 AND p.status = &#x27;Published&#x27;
-ORDER BY p.created DESC;
+<span class="cm">-- func byAuthor(name: String): List&lt;(Int, String)&gt;</span>
+<span class="kw">PREPARE</span> by_author(text) <span class="kw">AS</span>
+<span class="kw">SELECT</span> p.id, p.title
+<span class="kw">FROM</span> post <span class="kw">AS</span> p
+<span class="kw">JOIN</span> &quot;user&quot; <span class="kw">AS</span> author <span class="kw">ON</span> p.author = author.id
+<span class="kw">WHERE</span> author.name = $1 <span class="kw">AND</span> p.status = &#x27;Published&#x27;
+<span class="kw">ORDER BY</span> p.created <span class="kw">DESC</span>;
 
--- func editorOf(post: Int): String?
-PREPARE editor_of(integer) AS
-SELECT editor.name
-FROM post
-LEFT JOIN &quot;user&quot; AS editor ON post.editor = editor.id
-WHERE post.id = $1
-LIMIT 1;</pre></div></div>
+<span class="cm">-- func editorOf(post: Int): String?</span>
+<span class="kw">PREPARE</span> editor_of(integer) <span class="kw">AS</span>
+<span class="kw">SELECT</span> editor.name
+<span class="kw">FROM</span> post
+<span class="kw">LEFT <span class="kw">JOIN</span></span> &quot;user&quot; <span class="kw">AS</span> editor <span class="kw">ON</span> post.editor = editor.id
+<span class="kw">WHERE</span> post.id = $1
+<span class="kw">LIMIT</span> 1;</pre></div></div>
 <p class="lede">Le chemin à travers <code>editor?.</code> est devenu un <code>LEFT JOIN</code>, et le résultat déclaré <code>String?</code> dit qu'un billet sans éditeur répond null plutôt que de disparaître. C'est à cela que le checker tient chaque requête.</p>
 </section>
 <section class="band" id="cr-er-la-base"><h2>4. Créer la base</h2>
