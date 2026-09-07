@@ -1,11 +1,11 @@
 <!-- kealsql-band:start -->
 <p align="right">
-  <a href="https://github.com/geneacta/kealsql/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square&labelColor=2b2b2b"></a>
-  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-74%25-blue?style=flat-square&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealsql/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-73%25-blue?style=flat&labelColor=2b2b2b"></a>
 </p>
 <!-- kealsql-band:end -->
 
-<p align="center"><img src="kealsql.png" alt="KealSql" width="360"></p>
+<p align="center"><img src="site/assets/k.png" alt="" width="120"></p>
 
 **[geneacta.github.io/kealsql](https://geneacta.github.io/kealsql/)** · [getting started](https://geneacta.github.io/kealsql/start.html) · [docs](https://geneacta.github.io/kealsql/docs.html) · [the Keal language](https://geneacta.github.io/keal/)
 

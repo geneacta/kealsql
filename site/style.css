@@ -394,3 +394,12 @@ a.card:hover { border-color: var(--accent); }
 .cwin-sql .kw { color: var(--kw); }
 .cwin-sql .cm { color: var(--faint); }
 .hero .cwin-sql pre { white-space: pre-wrap; }
+
+/* ---- band and lede: classes the generator has always emitted, drawn here.
+   The headings take the family's display face after the shorthand. ---- */
+.band { padding: 56px 40px 22px; }
+.band h1 { margin: 0 0 18px; font: 700 40px/1.15 Sora, sans-serif; letter-spacing: -.02em; color: var(--ink); font-family: var(--display); }
+.band h2 { margin: 0 0 14px; font: 700 34px/1.2 Sora, sans-serif; letter-spacing: -.015em; color: var(--ink); font-family: var(--display); }
+.band .lede { margin: 0 0 14px; font: 400 16.5px/1.7 Sora, sans-serif; color: var(--dim); max-width: 68ch; }
+.band .cwin { margin: 18px 0; }
+.band:last-of-type { padding-bottom: 64px; }

@@ -24,7 +24,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = "<!-- kealsql-band:start -->"
 END = "<!-- kealsql-band:end -->"
-SHIELD = "https://img.shields.io/badge/%s-%s-blue?style=flat-square&labelColor=2b2b2b"
+SHIELD = "https://img.shields.io/badge/%s-%s-blue?style=flat&labelColor=2b2b2b"
 
 
 def read(name):

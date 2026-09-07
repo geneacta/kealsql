@@ -27,7 +27,19 @@ import content as C  # noqa: E402
 import walk as WK  # noqa: E402
 
 BASE_URL = "https://geneacta.github.io/kealsql/"
-VERSION = "v0.1.0"
+
+
+def version():
+    """The version keal.toml declares — the one number, read rather than copied."""
+    with open(os.path.join(ROOT, "keal.toml"), encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r'\s*version\s*=\s*"([^"]+)"', line)
+            if m:
+                return "v" + m.group(1)
+    raise SystemExit("site/build.py: keal.toml has no version")
+
+
+VERSION = version()
 
 # ---- a small markdown converter -----------------------------------------
 
