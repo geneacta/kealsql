@@ -82,7 +82,7 @@ START = {
         "lede": "Ten minutes from an empty PostgreSQL to a typed schema, its queries prepared, an application calling them, and a migration when the file changes. Every command here is the one the test suite runs.",
         "steps": [
             ("What you need", [
-                "<strong>Keal</strong>, the toolchain — <a href=\"https://geneacta.github.io/keal/\">geneacta.github.io/keal</a> has the three commands; KealSql wants a build at <code>58f059a</code> or later — the one whose loader reads a <code>.kealsql</code> import.",
+                "<strong>Keal</strong>, the toolchain — <a href=\"https://geneacta.github.io/keal/\">geneacta.github.io/keal</a> has the three commands; KealSql wants Keal 1.3.0 or later — the release whose loader reads a <code>.kealsql</code> import.",
                 "<strong>PostgreSQL 14 or later</strong> with its client tools on the path: <code>psql</code>, <code>createdb</code>, <code>pg_config</code>. The stored functions need the server headers and a C compiler (<code>postgresql-server-dev-NN</code> on Debian and Ubuntu); the client needs <code>libpq</code>'s headers (<code>libpq-dev</code>).",
                 "And KealSql itself:",
             ], "install", [
@@ -137,7 +137,7 @@ START = {
         "lede": "Dix minutes d'un PostgreSQL vide à un schéma typé, ses requêtes préparées, une application qui les appelle, et une migration quand le fichier change. Chaque commande ici est celle que la suite de tests exécute.",
         "steps": [
             ("Ce qu'il faut", [
-                "<strong>Keal</strong>, le toolchain — <a href=\"https://geneacta.github.io/keal/fr/\">geneacta.github.io/keal</a> donne les trois commandes ; KealSql veut une version à <code>58f059a</code> ou plus récente — celle dont le chargeur lit un import de <code>.kealsql</code>.",
+                "<strong>Keal</strong>, le toolchain — <a href=\"https://geneacta.github.io/keal/fr/\">geneacta.github.io/keal</a> donne les trois commandes ; KealSql veut Keal 1.3.0 ou plus récent — la version dont le chargeur lit un import de <code>.kealsql</code>.",
                 "<strong>PostgreSQL 14 ou plus</strong> avec ses outils clients sur le chemin : <code>psql</code>, <code>createdb</code>, <code>pg_config</code>. Les fonctions stockées demandent les en-têtes serveur et un compilateur C (<code>postgresql-server-dev-NN</code> sur Debian et Ubuntu) ; le client, les en-têtes de <code>libpq</code> (<code>libpq-dev</code>).",
                 "Et KealSql lui-même :",
             ], "install", [

@@ -43,9 +43,9 @@
     <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
   </div>
 </nav>
-<section class="hero"><h1>Create a database, and use it.</h1><p class="lede">Ten minutes from an empty PostgreSQL to a typed schema, its queries prepared, an application calling them, and a migration when the file changes. Every command here is the one the test suite runs.</p></section>
+<section class="band"><h1>Create a database, and use it.</h1><p class="lede">Ten minutes from an empty PostgreSQL to a typed schema, its queries prepared, an application calling them, and a migration when the file changes. Every command here is the one the test suite runs.</p></section>
 <section class="band" id="what-you-need"><h2>1. What you need</h2>
-<p class="lede"><strong>Keal</strong>, the toolchain — <a href="https://geneacta.github.io/keal/">geneacta.github.io/keal</a> has the three commands; KealSql wants a build at <code>58f059a</code> or later — the one whose loader reads a <code>.kealsql</code> import.</p>
+<p class="lede"><strong>Keal</strong>, the toolchain — <a href="https://geneacta.github.io/keal/">geneacta.github.io/keal</a> has the three commands; KealSql wants Keal 1.3.0 or later — the release whose loader reads a <code>.kealsql</code> import.</p>
 <p class="lede"><strong>PostgreSQL 14 or later</strong> with its client tools on the path: <code>psql</code>, <code>createdb</code>, <code>pg_config</code>. The stored functions need the server headers and a C compiler (<code>postgresql-server-dev-NN</code> on Debian and Ubuntu); the client needs <code>libpq</code>'s headers (<code>libpq-dev</code>).</p>
 <p class="lede">And KealSql itself:</p>
 <div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>git clone https://github.com/geneacta/kealsql

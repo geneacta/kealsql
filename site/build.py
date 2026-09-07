@@ -393,12 +393,14 @@ def landing(lang, S):
     chips = "".join("<span>%s</span>" % c for c in t["ways_chips"])
     body = """
 <section class="hero">
-  <div class="pill">%(pill)s</div>
-  <h1>%(h1)s</h1>
-  <p class="lede">%(sub)s</p>
-  <div class="cta">
-    <a class="btn-primary" href="start.html">%(cta1)s</a>
-    <a class="btn-ghost" href="docs.html">%(cta2)s</a>
+  <div class="herotext">
+    <div class="pill">%(pill)s</div>
+    <h1>%(h1)s</h1>
+    <p class="sub">%(sub)s</p>
+    <div class="ctas">
+      <a class="cta" href="start.html">%(cta1)s</a>
+      <a class="cta-line" href="docs.html">%(cta2)s</a>
+    </div>
   </div>
   %(hero)s
 </section>
@@ -440,7 +442,7 @@ def start(lang, S):
         "migrate": code_window(t["shell"], SHELL["migrate"], MIGRATION_EXAMPLE, "migration.sql"),
         "stored": code_window("blog.kealsql", S["stored"]) + code_window(t["shell"], SHELL["stored"]),
     }
-    parts = ['<section class="hero"><h1>%s</h1><p class="lede">%s</p></section>' % (t["h1"], t["lede"])]
+    parts = ['<section class="band"><h1>%s</h1><p class="lede">%s</p></section>' % (t["h1"], t["lede"])]
     toc = []
     for n, (head, before, key, after) in enumerate(t["steps"], 1):
         anchor = slug(head)
@@ -457,7 +459,7 @@ def start(lang, S):
 def walkthrough(lang, S):
     """Every step from a bare machine to a running program, with what to see."""
     t = WK.WALK[lang]
-    parts = ['<section class="hero"><h1>%s</h1><p class="lede">%s</p></section>' % (t["h1"], t["lede"])]
+    parts = ['<section class="band"><h1>%s</h1><p class="lede">%s</p></section>' % (t["h1"], t["lede"])]
     n = 0
     for head, before, code, output, after in t["steps"]:
         anchor = slug(head)
@@ -480,7 +482,7 @@ def walkthrough(lang, S):
 def docs_index(lang):
     t = C.DOCS[lang]
     cards = "".join('<a class="card" href="%s"><h3>%s</h3><p>%s</p></a>' % (h, n, d) for h, n, d in t["pages"])
-    body = '<section class="hero"><h1>%s</h1><p class="lede">%s</p></section><section class="cards">%s</section>' % (t["h1"], t["lede"], cards)
+    body = '<section class="band"><h1>%s</h1><p class="lede">%s</p></section><section class="cards">%s</section>' % (t["h1"], t["lede"], cards)
     return page(lang, "docs.html", t["title"], t["desc"], body, active="docs.html")
 
 

@@ -3,4 +3,4 @@ name = "kealsql"
 version = "0.1.0"
 
 [dependencies]
-keal = { git = "https://github.com/geneacta/keal", rev = "2790611" }
+keal = { git = "https://github.com/geneacta/keal", tag = "v1.3.0" }

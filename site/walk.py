@@ -32,7 +32,7 @@ WALK = {
                 "Keal is the language KealSql is written in and compiles to. Clone it, build it, and put the binary on your path. The build takes a minute or two.",
             ], "git clone https://github.com/geneacta/keal\ncd keal\ncargo build --release\nexport PATH=\"$PWD/target/release:$PATH\"\nkeal version\ncd ..", "keal 1.2.0", [
                 "The <code>export PATH</code> line lasts for this terminal only; add it to your shell's startup file (<code>~/.bashrc</code>, <code>~/.zshrc</code>) to keep it. <code>cargo install --path .</code> inside <code>keal/</code> is the permanent alternative.",
-                "KealSql needs a Keal newer than the 1.2.0 release — commit <code>58f059a</code> or later, which is what <code>main</code> is.",
+                "KealSql needs Keal 1.3.0 or later — the release whose loader reads a <code>.kealsql</code> import.",
             ]),
             ("Install PostgreSQL", [
                 "The database itself, its client tools, and — for the stored functions and the client — its development headers.",
@@ -134,7 +134,7 @@ WALK = {
                 "Keal est le langage dans lequel KealSql est écrit et vers lequel il compile. Clonez-le, construisez-le, et mettez le binaire sur votre chemin. La construction prend une ou deux minutes.",
             ], "git clone https://github.com/geneacta/keal\ncd keal\ncargo build --release\nexport PATH=\"$PWD/target/release:$PATH\"\nkeal version\ncd ..", "keal 1.2.0", [
                 "La ligne <code>export PATH</code> ne vaut que pour ce terminal ; ajoutez-la au fichier de démarrage de votre shell (<code>~/.bashrc</code>, <code>~/.zshrc</code>) pour la garder. <code>cargo install --path .</code> dans <code>keal/</code> est l'alternative permanente.",
-                "KealSql veut un Keal plus récent que la version 1.2.0 — le commit <code>58f059a</code> ou après, ce qu'est <code>main</code>.",
+                "KealSql veut Keal 1.3.0 ou plus récent — la version dont le chargeur lit un import de <code>.kealsql</code>.",
             ]),
             ("Installer PostgreSQL", [
                 "La base elle-même, ses outils clients, et — pour les fonctions stockées et le client — ses en-têtes de développement.",

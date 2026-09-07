@@ -43,7 +43,7 @@
     <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
   </div>
 </nav>
-<section class="hero"><h1>Pas à pas.</h1><p class="lede">D'une machine nue à un programme Keal qui parle à une base PostgreSQL qu'il a créée lui-même. Chaque commande est donnée, avec ce qu'elle fait et ce que l'écran doit montrer avant de continuer. Comptez une demi-heure, surtout à attendre des compilateurs.</p></section>
+<section class="band"><h1>Pas à pas.</h1><p class="lede">D'une machine nue à un programme Keal qui parle à une base PostgreSQL qu'il a créée lui-même. Chaque commande est donnée, avec ce qu'elle fait et ce que l'écran doit montrer avant de continuer. Comptez une demi-heure, surtout à attendre des compilateurs.</p></section>
 <section class="band" id="avant-de-commencer"><h2>Avant de commencer</h2>
 <p class="lede">Il faut un terminal et une connexion internet. Les commandes sont celles de Linux (Debian, Ubuntu) et macOS ; des notes Windows sont données là où ça diffère — le compilateur, le SQL et les migrations y marchent sous Git Bash, les fonctions stockées et le client pas encore.</p>
 <p class="lede">Quand une commande commence par <code>sudo</code>, la machine demandera votre mot de passe : c'est pour installer des paquets système, rien d'autre.</p>
@@ -64,7 +64,7 @@ export PATH=&quot;$PWD/target/release:$PATH&quot;
 keal version
 cd ..</pre><div class="cwin-out"><pre>keal 1.2.0</pre></div></div>
 <p class="lede">La ligne <code>export PATH</code> ne vaut que pour ce terminal ; ajoutez-la au fichier de démarrage de votre shell (<code>~/.bashrc</code>, <code>~/.zshrc</code>) pour la garder. <code>cargo install --path .</code> dans <code>keal/</code> est l'alternative permanente.</p>
-<p class="lede">KealSql veut un Keal plus récent que la version 1.2.0 — le commit <code>58f059a</code> ou après, ce qu'est <code>main</code>.</p>
+<p class="lede">KealSql veut Keal 1.3.0 ou plus récent — la version dont le chargeur lit un import de <code>.kealsql</code>.</p>
 </section>
 <section class="band" id="installer-postgresql"><h2>3. Installer PostgreSQL</h2>
 <p class="lede">La base elle-même, ses outils clients, et — pour les fonctions stockées et le client — ses en-têtes de développement.</p>

@@ -5,6 +5,6 @@
 [[dependency]]
 name = "keal"
 git = "https://github.com/geneacta/keal"
-rev = "2790611"
-commit = "27906110853a3cf684e0369bee3b5bbcd77f4dc5"
+tag = "v1.3.0"
+commit = "02bb9d5839fe69e9bfd673abc23b30116f86f710"
 asked_by = "kealsql"

@@ -88,7 +88,7 @@ LIMIT 1;</code></pre>
 <p>It is <strong>not a fork of PostgreSQL.</strong> The output is SQL for an unmodified server; nothing runs but the planner PostgreSQL already has.</p>
 <ul><li><a href="design.html">DESIGN.md</a> — the decisions and the reasons: why a transpiler, <code>Bool3</code>, <code>Id</code> / <code>Slug</code>, references, migrations.</li><li><a href="grammar.html">GRAMMAR.md</a> — the syntax, the well-formedness rules, and what each construct compiles to.</li><li><a href="https://github.com/geneacta/kealsql/blob/main/examples/shop.kealsql">examples/shop.kealsql</a> — a shop: six tables, two enums, twenty-odd queries and mutations, as an application would ship them; <code>shop.sql</code> is what they compile to and <code>shop.exec.sql</code> runs them on data.</li></ul>
 <h2 id="running-it">Running it</h2>
-<p>KealSql needs the Keal toolchain on the path, or beside the repository at <code>../keal</code> — at least <code>58f059a</code> (after 1.2.0): <code>runCommand</code> with a standard input, <code>Nothing</code> in the C backend, the public lexer, and the entry points and string ABI a host library uses (<code>keal_runtime_init</code>, <code>keal_program_run</code>, <code>keal_abi_str_*</code>).</p>
+<p>KealSql needs the Keal toolchain on the path, or beside the repository at <code>../keal</code> — Keal 1.3.0 or later: <code>runCommand</code> with a standard input, <code>Nothing</code> in the C backend, the public lexer, the entry points and string ABI a host library uses, and a loader that reads a <code>.kealsql</code> import.</p>
 <pre class="lang-sh"><code>keal src/main.keal file.kealsql                          # print the SQL
 keal src/main.keal --migrate file.kealsql --db mydb      # the migration from a live database to the file
 keal src/main.keal --migrate file.kealsql --db mydb --destructive
@@ -96,7 +96,7 @@ keal src/main.keal --plkeal build/ file.kealsql          # the stored functions 
 keal src/main.keal --lib build/file.so file.kealsql      # the SQL, CREATE FUNCTION naming that library
 keal src/main.keal --client app/ file.kealsql            # the queries as a Keal module over libpq
 tests/run.sh                                              # the suite: every case, byte for byte</code></pre>
-<p>From a program, the same queries are methods on a connection. A Keal program imports the <code>.kealsql</code> itself — Keal's loader (<code>58f059a</code> or later) has <code>kealsql</code> write <code>.kealsql/blog.client.keal</code> beside it and reads that, regenerating when the file changes — and links with libpq:</p>
+<p>From a program, the same queries are methods on a connection. A Keal program imports the <code>.kealsql</code> itself — Keal's loader (1.3.0 or later) has <code>kealsql</code> write <code>.kealsql/blog.client.keal</code> beside it and reads that, regenerating when the file changes — and links with libpq:</p>
 <pre><code>import &quot;./blog.kealsql&quot;
 
 val db = createBlog(&quot;&quot;, &quot;blog&quot;)          // the database and its schema, made if missing

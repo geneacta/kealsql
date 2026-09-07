@@ -1,7 +1,7 @@
 <!-- kealsql-band:start -->
 <p align="right">
   <a href="https://github.com/geneacta/kealsql/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat&labelColor=2b2b2b"></a>
-  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-73%25-blue?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-72%25-blue?style=flat&labelColor=2b2b2b"></a>
 </p>
 <!-- kealsql-band:end -->
 
@@ -80,10 +80,9 @@ server; nothing runs but the planner PostgreSQL already has.
 ## Running it
 
 KealSql needs the Keal toolchain on the path, or beside the repository at
-`../keal` — at least `58f059a` (after 1.2.0): `runCommand` with a standard
-input, `Nothing` in the C backend, the public lexer, and the entry points
-and string ABI a host library uses (`keal_runtime_init`,
-`keal_program_run`, `keal_abi_str_*`).
+`../keal` — Keal 1.3.0 or later: `runCommand` with a standard input,
+`Nothing` in the C backend, the public lexer, the entry points and string
+ABI a host library uses, and a loader that reads a `.kealsql` import.
 
 ```sh
 keal src/main.keal file.kealsql                          # print the SQL
@@ -96,7 +95,7 @@ tests/run.sh                                              # the suite: every cas
 ```
 
 From a program, the same queries are methods on a connection. A Keal
-program imports the `.kealsql` itself — Keal's loader (`58f059a` or later)
+program imports the `.kealsql` itself — Keal's loader (1.3.0 or later)
 has `kealsql` write `.kealsql/blog.client.keal` beside it and reads that,
 regenerating when the file changes — and links with libpq:
 

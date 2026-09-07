@@ -1,7 +1,5 @@
-/* KealSql site — the family stylesheet of the Keal sites, re-tinted: hue 280,
-   periwinkle. Same variables, same components, same breakpoints as keal/site;
-   six things change — the accent, the shade of black, the display face, the
-   mark, the hero motif, the dress of the code blocks. */
+/* KealSql site — the family stylesheet of the Keal sites, re-tinted by
+   site/family.py: hue 280, periwinkle. Do not edit; edit the parent, or the script. */
 :root {
   --bg: #0E0F16; --panel: #17181F;
   --line: rgba(183,189,255,.12); --line2: rgba(183,189,255,.16);
@@ -31,9 +29,9 @@ a { text-decoration: none; color: inherit; }
 .mark-k { display: block; width: 30px; height: 30px; object-fit: contain; }
 .wordmark { font: 700 22px Sora, sans-serif; letter-spacing: -.02em; color: var(--ink); }
 .wordmark .suffix { color: var(--accent); font-weight: 500; }
-/* KealSql's sign is an open cell — a cell of a table, where the foot of the
-   K would rest. Each site in the family has its own, and the shape says
-   which one you are on before the name is read. */
+/* Keal's sign is the foot of its own K, laid flat. Each site in the family
+   has its own — an open cell, a filled pixel, a round dot — and the shape
+   says which one you are on before the name is read. */
 .wordmark::after { content: ""; display: inline-block; width: 7px; height: 7px;
                    margin-left: 7px; vertical-align: 3px;
                    border: 2px solid var(--accent); box-sizing: border-box; }
@@ -64,8 +62,43 @@ a { text-decoration: none; color: inherit; }
 .cta-line:hover { border-color: rgba(183,189,255,.45); }
 
 /* ---- hero ---- */
+/* Two columns: the words, and the code window. The five parts of the left
+   half used to be direct children of this grid, so they filled it row by row
+   — the heading landed in the right column, the code window under the pill,
+   and the two buttons became one because the row that holds them is `.ctas`
+   while `.cta` is the filled button itself. The stylesheet and the generator
+   had drifted apart on three class names at once, and each was right about
+   its own half. */
 .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 56px;
         padding: 72px 40px 64px; align-items: center; }
+/* A grid column does not go below the width of its own content unless it is
+   told it may, and a `pre` does not fold — so a code window makes the whole
+   PAGE wider than the window instead of scrolling inside itself. Every grid
+   here had it: measured against a 485-point viewport, the documents came out
+   572, 595, 572, 601 and 780 points wide, the last one 60% over.
+   `overflow-x: auto` on the block cannot help while the column refuses to
+   shrink, because the grid measures the content and not the box.
+   Found by the keal-view session, which measured `scrollWidth` rather than
+   looking at a picture — and a picture would not have shown it, since
+   headless Chrome clamps its window to 500 points and hands back a crop. */
+.hero > *, .cards > *, .cards3 > *, .cards4 > *, .duo > *, .tgrid > *,
+.dgrid > *, .tourgrid > *, .sgrid > *, footer > * { min-width: 0; }
+/* And the code itself scrolls inside its own frame rather than pushing.
+   Every `pre`, not a list of the four wrappers I happened to think of: the
+   documentation column has bare ones, and `packages.html` had a block
+   reaching 614 points inside a 305-point window because it was not on that
+   list. A selector that names the cases it knows misses the one nobody
+   thought to name. */
+pre { overflow-x: auto; }
+/* An inline `code` in a sentence is one word to the line breaker, and
+   `.keal/deps/geometry/shapes.keal` has nowhere to break. `break-word` only
+   splits a token that does not fit a line ON ITS OWN, so anything shorter
+   than the column is never split and the column widens to hold it — which is
+   how three pages were still 40 points over at a 320-point width while
+   passing at 400. `anywhere` lets the break happen where it has to.
+   Found by the keal-view session, which measured below the smallest window
+   Chrome will make: 500 points is its floor, and a phone is 320. */
+.prose code, .dmain code, .band code, .card p code, .hero .sub code { overflow-wrap: anywhere; }
 .pill { display: inline-flex; align-items: center; gap: 8px;
         font: 600 12px 'JetBrains Mono', monospace; color: var(--mint);
         border: 1px solid rgba(204,210,255,.25); border-radius: 99px;
@@ -75,7 +108,10 @@ a { text-decoration: none; color: inherit; }
            letter-spacing: -.02em; text-wrap: pretty; }
 .hero .sub { margin: 0 0 34px; font: 400 18px/1.65 Sora, sans-serif;
              color: var(--dim); max-width: 52ch; }
-.ctas { display: flex; gap: 14px; align-items: center; margin-bottom: 26px; }
+/* Wrapping, because the same two buttons are longer in French: "Lire la
+   documentation" reached 367 points in a 305-point window while the English
+   pair fitted. A row sized for one language is a row measured once. */
+.ctas { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 26px; }
 .cmd { display: inline-flex; align-items: center; gap: 12px;
        font: 500 13.5px 'JetBrains Mono', monospace; color: var(--mint);
        background: var(--panel); border: 1px solid rgba(183,189,255,.14);
@@ -102,11 +138,11 @@ a { text-decoration: none; color: inherit; }
    page, the documentation index and "coming from" — laid their cards out as
    plain blocks, one full-width panel per row. `auto-fit` rather than a fixed
    count because those three hold five, ten and ten cards. */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
          gap: 18px; padding: 0 40px 64px; }
 /* Inside the documentation column there is 616px to work with, not the full
    band: three fixed columns leave 145px of text per card. */
-.dmain .cards3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.dmain .cards3 { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
 /* A caption under a figure, not another paragraph of body text. `.cap` is
    used on the landing page too, so this stays scoped to the doc column. */
 .dmain .cap { margin: 26px 0 4px; font: 500 12.5px 'JetBrains Mono', monospace;
@@ -126,6 +162,24 @@ a { text-decoration: none; color: inherit; }
 .chip { font: 500 11.5px 'JetBrains Mono', monospace; color: var(--mint);
         border: 1px solid rgba(204,210,255,.2); border-radius: 6px; padding: 3px 8px; }
 .card pre { margin: 0; font: 12.5px/1.7 'JetBrains Mono', monospace; color: var(--code); white-space: pre; }
+
+/* ---- a band: a heading and a lede, between the sections around it ----
+   `.band` and `.lede` had no rules at all, so four pages laid them out as
+   bare blocks — browser-default headings, no padding, text running to the
+   window's edge. It is the same thing `.cards` had: a class used by the
+   generator and never given a shape, which looks like a decision until you
+   look for the rule and there is none. */
+.band { padding: 56px 40px 22px; }
+.band h1 { margin: 0 0 18px; font: 700 40px/1.15 Sora, sans-serif;
+           letter-spacing: -.02em; color: var(--ink); }
+.band h2 { margin: 0 0 14px; font: 700 34px/1.2 Sora, sans-serif;
+           letter-spacing: -.015em; color: var(--ink); }
+.band .lede { margin: 0; font: 400 16.5px/1.7 Sora, sans-serif; color: var(--dim);
+              max-width: 68ch; }
+/* The last one carries the page's bottom margin, since nothing follows it
+   to supply one. */
+.band:last-of-type { padding-bottom: 64px; }
+.band .tablewrap, .band .callout { margin-top: 22px; }
 
 /* ---- two-column sections ---- */
 .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; padding: 64px 40px;
@@ -254,7 +308,15 @@ footer .base { margin: 0 0 14px; font: 400 13px/1.6 Sora, sans-serif; color: var
 @media (max-width: 900px) {
   .hero, .duo, .cards4, .cards3, .tgrid, .dgrid, footer { grid-template-columns: 1fr; display: grid; }
   .hero h1 { font-size: 38px; }
+  /* The bar wrapped, and the row of links inside it did not — seven names
+     and their gaps are 500 points wide on their own, which is what held
+     every page 572 points wide in a 485-point window however much the
+     content below was allowed to shrink. A flex row keeps its children on
+     one line until it is told otherwise. */
   .nav { flex-wrap: wrap; gap: 12px; }
+  .nav-left { flex-wrap: wrap; gap: 16px 24px; }
+  .nav-links { flex-wrap: wrap; gap: 10px 18px; }
+  .nav-right { flex-wrap: wrap; }
   .dtoc { display: none; }
 }
 
@@ -289,7 +351,9 @@ footer .base { margin: 0 0 14px; font: 400 13px/1.6 Sora, sans-serif; color: var
 .prose hr { border: 0; border-top: 1px solid var(--line); margin: 34px 0; }
 .prose strong { color: var(--ink); font-weight: 600; }
 
-.tablewrap { overflow-x: auto; margin: 18px 0; }
+/* The scroller has to be bounded by its column, or the 460-point floor
+   below pushes the page instead of scrolling inside it. */
+.tablewrap { overflow-x: auto; margin: 18px 0; max-width: 100%; }
 .tablewrap table { border-collapse: collapse; width: 100%; min-width: 460px; }
 .tablewrap th { text-align: left; font: 600 11px 'JetBrains Mono', monospace; color: var(--faint);
                 letter-spacing: .09em; text-transform: uppercase; padding: 8px 14px 8px 0;
@@ -373,7 +437,7 @@ a.card:hover { border-color: var(--accent); }
 /* Code stays the language's own colours, not the page's. */
 .kealler .win pre, .kealler pre { --kw: #63D3B4; --ty: #A9EBCD; }
 
-/* ---- the family ---- */
+/* ---- KealSql's six ---- */
 .hero h1, .duo h2, .gs-head h2, .band h1, .band h2, .doc-head h1, .prose h1 { font-family: var(--display); }
 .hero { background-image: var(--motif); background-size: var(--motif-size); }
 /* The way back to Keal: its own mint, as the foot of its K, before the word —
@@ -394,12 +458,6 @@ a.card:hover { border-color: var(--accent); }
 .cwin-sql .kw { color: var(--kw); }
 .cwin-sql .cm { color: var(--faint); }
 .hero .cwin-sql pre { white-space: pre-wrap; }
-
-/* ---- band and lede: classes the generator has always emitted, drawn here.
-   The headings take the family's display face after the shorthand. ---- */
-.band { padding: 56px 40px 22px; }
-.band h1 { margin: 0 0 18px; font: 700 40px/1.15 Sora, sans-serif; letter-spacing: -.02em; color: var(--ink); font-family: var(--display); }
-.band h2 { margin: 0 0 14px; font: 700 34px/1.2 Sora, sans-serif; letter-spacing: -.015em; color: var(--ink); font-family: var(--display); }
-.band .lede { margin: 0 0 14px; font: 400 16.5px/1.7 Sora, sans-serif; color: var(--dim); max-width: 68ch; }
 .band .cwin { margin: 18px 0; }
-.band:last-of-type { padding-bottom: 64px; }
+.band .lede { margin-bottom: 14px; }
+.cards a.card { display: block; }
