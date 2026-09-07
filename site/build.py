@@ -29,6 +29,24 @@ import walk as WK  # noqa: E402
 BASE_URL = "https://geneacta.github.io/kealsql/"
 
 
+def asset_tag(rel):
+    """`assets/k.png?v=<eight hex>` — the file's own content, in its URL.
+
+    The mark was replaced at a URL that had already been served for weeks, so
+    every browser that had visited kept showing the old one — and a favicon
+    is kept far past the ten minutes the header asks for. A URL that changes
+    when the bytes change is the only thing that reaches a reader who has
+    been here before; telling them to reload is not a fix, it is a request.
+    """
+    import hashlib as _h
+    path = os.path.join(SITE, rel)
+    try:
+        with open(path, "rb") as f:
+            return "%s?v=%s" % (rel, _h.sha256(f.read()).hexdigest()[:8])
+    except OSError:
+        return rel
+
+
 def version():
     """The version keal.toml declares — the one number, read rather than copied."""
     with open(os.path.join(ROOT, "keal.toml"), encoding="utf-8") as f:
@@ -235,7 +253,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
 <meta name="twitter:title" content="%(title)s">
 <meta name="twitter:description" content="%(desc)s">
 <meta name="twitter:image" content="%(image)s">
-<link rel="icon" type="image/png" href="%(prefix)sassets/k.png">
+<link rel="icon" type="image/png" href="%(prefix)s%(mark_k)s">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -246,7 +264,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
 <nav class="nav">
   <div class="nav-left">
     <a class="mark" href="index.html">
-      <img class="mark-k" src="%(prefix)sassets/k.png" alt="">
+      <img class="mark-k" src="%(prefix)s%(mark_k)s" alt="">
       <span class="wordmark">keal<span class="suffix">sql</span></span>
     </a>
     <div class="nav-links">%(links)s</div>
@@ -273,6 +291,7 @@ def page(lang, filename, title, description, body, active=None, sidebar=None, to
 </html>
 """ % {
         "lang": lang, "title": html.escape(title), "desc": html.escape(description), "prefix": prefix,
+        "mark_k": asset_tag("assets/k.png"),
         "canonical": BASE_URL + ("" if lang == "en" else "fr/") + filename,
         "alt_en": BASE_URL + filename, "alt_fr": BASE_URL + "fr/" + filename,
         "locale": "en_GB" if lang == "en" else "fr_FR", "image": BASE_URL + "assets/k.png",
@@ -526,6 +545,11 @@ def check_links(written):
         here = os.path.dirname(path)
         for href in re.findall(r'href="([^"#]+)', text):
             if href.startswith(("http://", "https://", "mailto:")):
+                continue
+            # A cache-busting `?v=…` names the same file. Strip it before
+            # looking for one, or every marked asset reads as missing.
+            href = href.partition("?")[0]
+            if not href:
                 continue
             if not os.path.exists(os.path.join(here, href)):
                 print("broken link in %s: %s" % (os.path.relpath(path, ROOT), href))
