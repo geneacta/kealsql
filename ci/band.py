@@ -24,7 +24,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = "<!-- kealsql-band:start -->"
 END = "<!-- kealsql-band:end -->"
-SHIELD = "https://img.shields.io/badge/%s-%s-blue?style=flat&labelColor=2b2b2b"
+SHIELD = "https://img.shields.io/badge/%s-%s-%s?style=flat&labelColor=2b2b2b"
 
 
 def read(name):
@@ -38,6 +38,20 @@ def version():
         if m:
             return m.group(1)
     raise SystemExit("ci/band.py: keal.toml has no version")
+
+
+def keal_version():
+    """Which Keal this is built against, from the manifest that pins it.
+
+    Read rather than remembered: `keal.toml` is what `keal fetch` obeys, so a
+    badge taken from anywhere else could say one thing while the build used
+    another. If the pin stops being a tag one day, this stops rather than
+    guessing.
+    """
+    m = re.search(r'keal\s*=\s*\{[^}]*tag\s*=\s*"v?([^"]+)"', read("keal.toml"))
+    if not m:
+        raise SystemExit("ci/band.py: keal.toml does not pin a Keal tag")
+    return m.group(1)
 
 
 def embedded_c(text):
@@ -79,8 +93,11 @@ def band():
     return "\n".join([
         START,
         '<p align="right">',        # the layout the README chose: the band above the logo, on the right
-        '  <a href="%s"><img alt="version" src="%s"></a>' % (releases, SHIELD % ("version", version())),
-        '  <a href="%s"><img alt="written in Keal" src="%s"></a>' % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share)),
+        '  <a href="%s"><img alt="version" src="%s"></a>' % (releases, SHIELD % ("version", version(), "blue")),
+        '  <a href="%s"><img alt="written in Keal" src="%s"></a>' % (files, SHIELD % ("written%20in%20Keal", "%d%%25" % share, "blue")),
+        '  <a href="%s"><img alt="Keal" src="%s"></a>'
+        % ("https://github.com/geneacta/keal/releases/tag/v" + keal_version(),
+           SHIELD % ("Keal", keal_version(), "orange")),
         "</p>",
         END,
     ])
