@@ -1,0 +1,822 @@
+3:1 keyword enum
+3:6 ident Role
+3:11 {
+3:13 ident Admin
+3:18 ,
+3:20 ident Member
+3:27 }
+4:1 ;
+5:1 keyword table
+5:7 ident Org
+5:11 {
+6:5 ident id
+6:7 :
+6:11 ident Id
+7:1 ;
+7:5 ident name
+7:9 :
+7:11 ident Slug
+8:1 ;
+8:1 }
+9:1 ;
+10:1 keyword table
+10:7 ident Account
+10:15 {
+11:5 ident id
+11:7 :
+11:14 ident Id
+12:1 ;
+12:5 ident org
+12:8 :
+12:14 ident RefSlug
+12:21 <
+12:22 ident Org
+12:25 >
+13:5 keyword unique
+13:12 ident login
+13:17 :
+13:19 ident String
+13:25 (
+13:26 int 32
+13:28 )
+14:1 ;
+14:5 ident role
+14:9 :
+14:14 ident Role
+15:1 ;
+15:5 ident age
+15:8 :
+15:14 ident Int
+15:17 ?
+16:1 ;
+16:5 keyword unique
+16:11 (
+16:12 ident org
+16:15 ,
+16:17 ident login
+16:22 )
+17:1 ;
+17:1 }
+18:1 ;
+19:1 keyword table
+19:7 ident Session
+19:15 {
+20:5 keyword primary
+20:13 ident token
+20:18 :
+20:20 ident Uuid
+21:1 ;
+21:5 ident account
+21:12 :
+21:14 ident RefId
+21:19 <
+21:20 ident Account
+21:27 >
+22:5 ident note
+22:9 :
+22:14 ident String
+22:20 ?
+23:1 ;
+23:1 }
+24:1 ;
+25:1 keyword table
+25:7 ident Audit
+25:13 {
+26:5 ident id
+26:7 :
+26:14 ident Id
+27:1 ;
+27:5 ident session
+27:12 :
+27:14 ident Ref
+27:17 <
+27:18 ident Session
+27:25 .
+27:26 ident token
+27:31 >
+28:5 keyword cascade
+28:13 ident byLogin
+28:20 :
+28:22 ident Ref
+28:25 <
+28:26 ident Account
+28:33 .
+28:34 ident login
+28:39 >
+29:1 }
+30:1 ;
+32:1 func
+32:6 ident adults
+32:12 (
+32:13 )
+32:14 :
+32:16 ident List
+32:20 <
+32:21 ident Account
+32:28 >
+32:30 {
+33:5 ident from
+33:9 (
+33:10 ident Account
+33:17 )
+33:18 .
+33:19 ident where
+33:24 (
+33:25 ident age
+33:29 >=
+33:32 int 18
+33:34 )
+33:35 .
+33:36 ident select
+33:42 (
+33:43 *
+33:44 )
+34:1 ;
+34:1 }
+35:1 ;
+37:1 func
+37:6 ident withoutAge
+37:16 (
+37:17 )
+37:18 :
+37:20 ident List
+37:24 <
+37:25 ident String
+37:31 >
+37:33 {
+38:5 ident from
+38:9 (
+38:10 ident Account
+38:17 )
+38:18 .
+38:19 ident where
+38:24 (
+38:25 ident age
+38:29 ==
+38:32 null
+38:36 )
+38:37 .
+38:38 ident select
+38:44 (
+38:45 ident login
+38:50 )
+39:1 ;
+39:1 }
+40:1 ;
+42:1 func
+42:6 ident sameAge
+42:13 (
+42:14 ident years
+42:19 :
+42:21 ident Int
+42:24 ?
+42:25 )
+42:26 :
+42:28 ident List
+42:32 <
+42:33 ident Int
+42:36 >
+42:38 {
+43:5 ident from
+43:9 (
+43:10 ident Account
+43:17 )
+43:18 .
+43:19 ident where
+43:24 (
+43:25 ident age
+43:29 ==
+43:32 ident years
+43:37 )
+43:38 .
+43:39 ident select
+43:45 (
+43:46 ident id
+43:48 )
+44:1 ;
+44:1 }
+45:1 ;
+46:1 func
+46:6 ident sameAgeStrict
+46:19 (
+46:20 ident years
+46:25 :
+46:27 ident Int
+46:30 ?
+46:31 )
+46:32 :
+46:34 ident List
+46:38 <
+46:39 ident Int
+46:42 >
+46:44 {
+47:5 ident from
+47:9 (
+47:10 ident Account
+47:17 )
+47:18 .
+47:19 ident where
+47:24 (
+47:25 ident age
+47:29 ===
+47:33 ident years
+47:38 )
+47:39 .
+47:40 ident select
+47:46 (
+47:47 ident id
+47:49 )
+48:1 ;
+48:1 }
+49:1 ;
+51:1 func
+51:6 ident crowdedRoles
+51:18 (
+51:19 )
+51:20 :
+51:22 ident List
+51:26 <
+51:27 (
+51:28 ident Role
+51:32 ,
+51:34 ident Int
+51:37 )
+51:38 >
+51:40 {
+52:5 ident from
+52:9 (
+52:10 ident Account
+52:17 )
+52:18 .
+52:19 ident groupBy
+52:26 (
+52:27 ident role
+52:31 )
+52:32 .
+52:33 ident where
+52:38 (
+52:39 ident count
+52:44 (
+52:45 *
+52:46 )
+52:48 >
+52:50 int 1
+52:51 )
+52:52 .
+52:53 ident orderBy
+52:60 (
+52:61 ident role
+52:65 )
+52:66 .
+52:67 ident select
+52:73 (
+52:74 ident role
+52:78 ,
+52:80 ident count
+52:85 (
+52:86 *
+52:87 )
+52:88 )
+53:1 ;
+53:1 }
+54:1 ;
+56:1 func
+56:6 ident label
+56:11 (
+56:12 ident acc
+56:15 :
+56:17 ident Int
+56:20 )
+56:21 :
+56:23 ident String
+56:29 ?
+56:31 {
+57:5 ident from
+57:9 (
+57:10 ident Account
+57:17 )
+57:18 .
+57:19 ident where
+57:24 (
+57:25 ident id
+57:28 ==
+57:31 ident acc
+57:34 )
+57:35 .
+57:36 ident select
+57:42 (
+57:43 when
+57:48 (
+57:49 ident role
+57:53 )
+57:55 {
+58:9 ident Admin
+58:15 ->
+58:18 str lit(admin)
+59:1 ;
+59:9 ident Member
+59:16 ->
+59:19 str lit(member)
+60:1 ;
+60:5 }
+60:6 )
+60:7 .
+60:8 ident first
+60:13 (
+60:14 )
+61:1 ;
+61:1 }
+62:1 ;
+64:1 func
+64:6 ident orgOf
+64:11 (
+64:12 ident acc
+64:15 :
+64:17 ident Int
+64:20 )
+64:21 :
+64:23 ident String
+64:29 ?
+64:31 {
+65:5 ident from
+65:9 (
+65:10 ident Account
+65:18 keyword as
+65:21 ident a
+65:22 )
+65:23 .
+65:24 ident where
+65:29 (
+65:30 ident a
+65:31 .
+65:32 ident id
+65:35 ==
+65:38 ident acc
+65:41 )
+65:42 .
+65:43 ident select
+65:49 (
+65:50 ident a
+65:51 .
+65:52 ident org
+65:55 .
+65:56 ident name
+65:60 )
+65:61 .
+65:62 ident first
+65:67 (
+65:68 )
+66:1 ;
+66:1 }
+67:1 ;
+69:1 func
+69:6 ident auditNotes
+69:16 (
+69:17 )
+69:18 :
+69:20 ident List
+69:24 <
+69:25 (
+69:26 ident Int
+69:29 ,
+69:31 ident String
+69:37 )
+69:38 >
+69:40 {
+70:5 ident from
+70:9 (
+70:10 ident Audit
+70:16 keyword as
+70:19 ident au
+70:21 )
+70:22 .
+70:23 ident orderBy
+70:30 (
+70:31 ident au
+70:33 .
+70:34 ident id
+70:36 )
+70:37 .
+70:38 ident select
+70:44 (
+70:45 ident au
+70:47 .
+70:48 ident id
+70:50 ,
+70:52 ident au
+70:54 .
+70:55 ident session
+70:62 .
+70:63 ident note
+70:68 ?:
+70:71 str lit()
+70:73 )
+71:1 ;
+71:1 }
+72:1 ;
+74:1 func
+74:6 ident oldMembers
+74:16 (
+74:17 )
+74:18 :
+74:20 ident List
+74:24 <
+74:25 ident Int
+74:28 >
+74:30 {
+75:5 val
+75:9 ident members
+75:17 =
+75:19 ident from
+75:23 (
+75:24 ident Account
+75:31 )
+75:32 .
+75:33 ident where
+75:38 (
+75:39 ident role
+75:44 ==
+75:47 ident Member
+75:53 )
+76:1 ;
+76:5 ident from
+76:9 (
+76:10 ident Account
+76:17 )
+76:18 .
+76:19 ident where
+76:24 (
+76:25 ident id
+76:28 in
+76:31 ident members
+76:38 .
+76:39 ident select
+76:45 (
+76:46 ident id
+76:48 )
+76:49 )
+76:50 .
+76:51 ident where
+76:56 (
+76:57 ident age
+76:61 ?:
+76:64 int 0
+76:66 >
+76:68 int 60
+76:70 )
+76:71 .
+76:72 ident select
+76:78 (
+76:79 ident id
+76:81 )
+77:1 ;
+77:1 }
+78:1 ;
+79:1 func
+79:6 ident hasLogin
+79:14 (
+79:15 ident l
+79:16 :
+79:18 ident String
+79:24 )
+79:25 :
+79:27 ident Bool
+79:32 {
+80:5 ident from
+80:9 (
+80:10 ident Account
+80:17 )
+80:18 .
+80:19 ident where
+80:24 (
+80:25 ident login
+80:31 ==
+80:34 ident l
+80:35 )
+80:36 .
+80:37 ident exists
+80:43 (
+80:44 )
+81:1 ;
+81:1 }
+82:1 ;
+83:1 func
+83:6 ident admins
+83:12 (
+83:13 )
+83:14 :
+83:16 ident Int
+83:20 {
+84:5 ident from
+84:9 (
+84:10 ident Account
+84:17 )
+84:18 .
+84:19 ident where
+84:24 (
+84:25 ident role
+84:30 ==
+84:33 ident Admin
+84:39 and
+84:43 ident age
+84:47 !=
+84:50 null
+84:54 )
+84:55 .
+84:56 ident count
+84:61 (
+84:62 )
+85:1 ;
+85:1 }
+86:1 ;
+87:1 func
+87:6 ident page
+87:10 (
+87:11 ident n
+87:12 :
+87:14 ident Int
+87:17 )
+87:18 :
+87:20 ident List
+87:24 <
+87:25 ident String
+87:31 >
+87:33 {
+88:5 ident from
+88:9 (
+88:10 ident Account
+88:17 )
+88:18 .
+88:19 ident orderBy
+88:26 (
+88:27 ident login
+88:32 )
+88:33 .
+88:34 ident limit
+88:39 (
+88:40 int 10
+88:42 )
+88:43 .
+88:44 ident offset
+88:50 (
+88:51 ident n
+88:53 *
+88:55 int 10
+88:57 )
+88:58 .
+88:59 ident distinct
+88:67 (
+88:68 )
+88:69 .
+88:70 ident select
+88:76 (
+88:77 ident login
+88:82 )
+89:1 ;
+89:1 }
+90:1 ;
+91:1 func
+91:6 ident oldestFirst
+91:17 (
+91:18 )
+91:19 :
+91:21 ident List
+91:25 <
+91:26 (
+91:27 ident String
+91:33 ,
+91:35 ident Int
+91:38 ?
+91:39 )
+91:40 >
+91:42 {
+92:5 ident from
+92:9 (
+92:10 ident Account
+92:17 )
+92:18 .
+92:19 ident orderBy
+92:26 (
+92:27 ident age
+92:30 .
+92:31 ident desc
+92:35 .
+92:36 ident nullsLast
+92:45 ,
+92:47 ident login
+92:52 )
+92:53 .
+92:54 ident select
+92:60 (
+92:61 ident login
+92:66 ,
+92:68 ident age
+92:71 )
+93:1 ;
+93:1 }
+94:1 ;
+95:1 func
+95:6 ident byAccount
+95:15 (
+95:16 ident acc
+95:19 :
+95:21 ident Int
+95:24 )
+95:25 :
+95:27 ident List
+95:31 <
+95:32 (
+95:33 ident Int
+95:36 ,
+95:38 ident String
+95:44 )
+95:45 >
+95:47 {
+96:5 ident from
+96:9 (
+96:10 ident Session
+96:18 keyword as
+96:21 ident s
+96:22 )
+96:23 .
+96:24 ident join
+96:28 (
+96:29 ident Audit
+96:35 keyword as
+96:38 ident a
+96:39 ,
+96:41 ident a
+96:42 .
+96:43 ident session
+96:51 ==
+96:54 ident s
+96:55 .
+96:56 ident token
+96:61 )
+96:62 .
+96:63 ident where
+96:68 (
+96:69 ident s
+96:70 .
+96:71 ident account
+96:79 ==
+96:82 ident acc
+96:85 )
+96:86 .
+96:87 ident select
+96:93 (
+96:94 ident a
+96:95 .
+96:96 ident id
+96:98 ,
+96:100 ident a
+96:101 .
+96:102 ident byLogin
+96:109 )
+97:1 ;
+97:1 }
+98:1 ;
+99:1 func
+99:6 ident search
+99:12 (
+99:13 ident pattern
+99:20 :
+99:22 ident String
+99:28 )
+99:29 :
+99:31 ident List
+99:35 <
+99:36 ident String
+99:42 >
+99:44 {
+100:5 ident from
+100:9 (
+100:10 ident Account
+100:17 )
+100:18 .
+100:19 unless
+100:25 (
+100:26 ident login
+100:31 .
+100:32 ident like
+100:36 (
+100:37 ident pattern
+100:44 )
+100:46 or
+100:49 ident login
+100:54 .
+100:55 ident lower
+100:60 (
+100:61 )
+100:62 .
+100:63 ident startsWith
+100:73 (
+100:74 str lit(x)
+100:77 )
+100:78 )
+100:79 .
+100:80 ident select
+100:86 (
+100:87 ident login
+100:92 )
+101:1 ;
+101:1 }
+102:1 ;
+103:1 func
+103:6 ident newAccount
+103:16 (
+103:17 ident org
+103:20 :
+103:22 ident String
+103:28 ,
+103:30 ident login
+103:35 :
+103:37 ident String
+103:43 ,
+103:45 ident role
+103:49 :
+103:51 ident Role
+103:55 )
+103:56 :
+103:58 ident Account
+103:66 {
+104:5 ident insert
+104:11 (
+104:12 ident Account
+104:19 (
+104:20 ident org
+104:24 =
+104:26 ident org
+104:29 ,
+104:31 ident login
+104:37 =
+104:39 ident login
+104:44 ,
+104:46 ident role
+104:51 =
+104:53 ident role
+104:57 )
+104:58 )
+105:1 ;
+105:1 }
+106:1 ;
+107:1 proc
+107:6 ident rename
+107:12 (
+107:13 ident acc
+107:16 :
+107:18 ident Int
+107:21 ,
+107:23 ident newLogin
+107:31 :
+107:33 ident String
+107:39 )
+107:41 {
+108:5 ident update
+108:11 (
+108:12 ident Account
+108:19 )
+108:20 .
+108:21 ident where
+108:26 (
+108:27 ident id
+108:30 ==
+108:33 ident acc
+108:36 )
+108:37 .
+108:38 ident set
+108:41 (
+108:42 ident login
+108:48 =
+108:50 ident newLogin
+108:58 ,
+108:60 ident age
+108:64 =
+108:66 null
+108:70 )
+109:1 ;
+109:1 }
+110:1 ;
+111:1 proc
+111:6 ident dropSessions
+111:18 (
+111:19 ident acc
+111:22 :
+111:24 ident Int
+111:27 )
+111:29 {
+112:5 ident delete
+112:11 (
+112:12 ident Session
+112:19 )
+112:20 .
+112:21 ident where
+112:26 (
+112:27 ident account
+112:35 ==
+112:38 ident acc
+112:41 )
+113:1 ;
+113:1 }
+114:1 ;
+114:1 eof

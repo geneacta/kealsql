@@ -676,6 +676,59 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
     }
 }
 
+/// Whether the word at `i` is one of KealSql's contextual keywords *in this
+/// position* — the same lookahead the parser applies, gathered here so that
+/// `kealsql tokens` says what the parser would, and an editor can ask rather
+/// than remember the list. Purely lexical: a file that does not parse still
+/// gets its tokens.
+package func keywordAt(toks: List<Token>, i: Int): Bool {
+    val t = toks[i]
+    if (t.kind != "ident") { return false }
+    val next = if (i + 1 < toks.size) { toks[i + 1] } else { t }
+    val next2 = if (i + 2 < toks.size) { toks[i + 2] } else { t }
+    val prev = if (i > 0) { toks[i - 1] } else { t }
+    val prev2 = if (i > 1) { toks[i - 2] } else { t }
+    val nextIdent = i + 1 < toks.size and next.kind == "ident"
+    return when (t.text) {
+        "unknown" -> true
+        "table", "enum", "schema", "trigger" -> nextIdent
+        "view" -> nextIdent or (i > 0 and prev.kind == "ident" and prev.text == "materialized")
+        "materialized" -> nextIdent and next.text == "view"
+        "stored" -> next.kind == "func" or next.kind == "proc" or (nextIdent and next.text == "pure")
+        "pure" -> i > 0 and prev.kind == "ident" and prev.text == "stored"
+        "on" -> i > 1 and prev.kind == "ident" and prev2.kind == "ident" and prev2.text == "trigger"
+        "before", "after" -> i > 1 and prev.kind == "ident" and prev2.kind == "ident" and prev2.text == "on"
+        "insert", "update", "delete" -> i > 0 and prev.kind == "ident" and (prev.text == "before" or prev.text == "after")
+        "primary", "slug", "indexed", "cascade", "restrict", "setNull" -> nextIdent
+        "unique" -> nextIdent or next.kind == "("
+        "index", "renamed" -> next.kind == "("
+        "check" -> nextIdent and next2.kind == "("
+        "as" -> nextIdent and i > 0 and (prev.kind == "ident" or prev.kind == ")")
+        else -> false
+    }
+}
+
+/// `kealsql tokens`: one line per token, `line:col kind text`, in the form of
+/// `keal tokens` — with `===` and `!==` as one token each, and KealSql's
+/// keywords as `keyword` rather than `ident`.
+package func tokenLines(source: String): List<String> {
+    val toks = lexFile(source.replace("\r\n", "\n"))
+    val out: List<String> = []
+    var i = 0
+    while (i < toks.size) {
+        val t = toks[i]
+        if ((t.kind == "==" or t.kind == "!=") and i + 1 < toks.size and toks[i + 1].kind == "=" and toks[i + 1].line == t.line and toks[i + 1].col == t.col + 2) {
+            out.add("${t.line}:${t.col} ${t.kind}=")
+            i += 2
+            continue
+        }
+        if (keywordAt(toks, i)) { out.add("${t.line}:${t.col} keyword ${t.text}") }
+        else { out.add(tokenDumpLine(t)) }
+        i += 1
+    }
+    return out
+}
+
 package func parseFile(path: String, source: String): ProgramN {
     lexErrorPrefix = "${path}:"
     return Parser(lexFile(source), path, source).program()

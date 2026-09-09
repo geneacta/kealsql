@@ -1,0 +1,237 @@
+3:1 keyword table
+3:7 ident Product
+3:15 {
+4:5 ident id
+4:7 :
+4:14 ident Id
+5:1 ;
+5:5 ident sku
+5:8 :
+5:14 ident Slug
+6:1 ;
+6:5 ident price
+6:10 :
+6:14 ident Decimal
+6:21 (
+6:22 int 10
+6:24 ,
+6:26 int 2
+6:27 )
+7:1 ;
+7:5 ident stock
+7:10 :
+7:14 ident Int
+7:18 =
+7:20 int 0
+8:1 ;
+8:5 ident updates
+8:12 :
+8:14 ident Int
+8:18 =
+8:20 int 0
+9:1 ;
+9:5 ident note
+9:9 :
+9:14 ident String
+9:20 ?
+10:1 ;
+10:1 }
+11:1 ;
+12:1 keyword table
+12:7 ident Audit
+12:13 {
+13:5 ident id
+13:7 :
+13:13 ident Id
+14:1 ;
+14:5 ident sku
+14:8 :
+14:13 ident String
+15:1 ;
+15:5 ident change
+15:11 :
+15:13 ident String
+16:1 ;
+16:1 }
+17:1 ;
+18:1 proc
+18:6 ident log
+18:9 (
+18:10 ident sku
+18:13 :
+18:15 ident String
+18:21 ,
+18:23 ident change
+18:29 :
+18:31 ident String
+18:37 )
+18:39 {
+19:5 ident insert
+19:11 (
+19:12 ident Audit
+19:17 (
+19:18 ident sku
+19:22 =
+19:24 ident sku
+19:27 ,
+19:29 ident change
+19:36 =
+19:38 ident change
+19:44 )
+19:45 )
+20:1 ;
+20:1 }
+21:1 ;
+22:1 func
+22:6 ident audits
+22:12 (
+22:13 )
+22:14 :
+22:16 ident List
+22:20 <
+22:21 (
+22:22 ident String
+22:28 ,
+22:30 ident String
+22:36 )
+22:37 >
+22:39 {
+23:5 ident from
+23:9 (
+23:10 ident Audit
+23:15 )
+23:16 .
+23:17 ident orderBy
+23:24 (
+23:25 ident id
+23:27 )
+23:28 .
+23:29 ident select
+23:35 (
+23:36 ident sku
+23:39 ,
+23:41 ident change
+23:47 )
+24:1 ;
+24:1 }
+25:1 ;
+27:1 keyword trigger
+27:9 ident normalizeSku
+27:22 keyword on
+27:25 ident Product
+27:33 keyword before
+27:40 keyword insert
+27:47 {
+28:5 return
+28:12 ident row
+28:15 .
+28:16 ident with
+28:20 (
+28:21 ident sku
+28:25 =
+28:27 ident row
+28:30 .
+28:31 ident sku
+28:34 .
+28:35 ident toUpper
+28:42 (
+28:43 )
+28:44 ,
+28:46 ident note
+28:51 =
+28:53 ident row
+28:56 .
+28:57 ident note
+28:62 ?:
+28:65 str lit(new)
+28:70 )
+29:1 ;
+29:1 }
+30:1 ;
+31:1 keyword trigger
+31:9 ident countUpdates
+31:22 keyword on
+31:25 ident Product
+31:33 keyword before
+31:40 keyword update
+31:47 {
+32:5 if
+32:8 (
+32:9 ident row
+32:12 .
+32:13 ident stock
+32:19 <
+32:21 int 0
+32:22 )
+32:24 {
+32:26 throw
+32:32 str lit(stock below zero for )
+32:56 +
+32:58 ident row
+32:61 .
+32:62 ident sku
+32:66 }
+33:1 ;
+33:5 return
+33:12 ident row
+33:15 .
+33:16 ident with
+33:20 (
+33:21 ident updates
+33:29 =
+33:31 ident old
+33:34 .
+33:35 ident updates
+33:43 +
+33:45 int 1
+33:46 )
+34:1 ;
+34:1 }
+35:1 ;
+37:1 keyword trigger
+37:9 ident auditInsert
+37:21 keyword on
+37:24 ident Product
+37:32 keyword after
+37:38 keyword insert
+37:45 {
+38:5 ident log
+38:8 (
+38:9 ident row
+38:12 .
+38:13 ident sku
+38:16 ,
+38:18 str lit(inserted at )
+38:33 +
+38:35 ident row
+38:38 .
+38:39 ident price
+38:44 )
+39:1 ;
+39:1 }
+40:1 ;
+41:1 keyword trigger
+41:9 ident auditDelete
+41:21 keyword on
+41:24 ident Product
+41:32 keyword after
+41:38 keyword delete
+41:45 {
+42:5 ident log
+42:8 (
+42:9 ident old
+42:12 .
+42:13 ident sku
+42:16 ,
+42:18 str lit(deleted with )
+42:34 +
+42:36 ident old
+42:39 .
+42:40 ident updates
+42:48 +
+42:50 str lit( updates)
+42:60 )
+43:1 ;
+43:1 }
+44:1 ;
+44:1 eof

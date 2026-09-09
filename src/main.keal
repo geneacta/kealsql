@@ -7,6 +7,7 @@
 //                                                          build script for the PostgreSQL shared library
 //   keal src/main.keal --lib PATH file.kealsql             the SQL, with CREATE FUNCTION naming that library
 //   keal src/main.keal --client DIR file.kealsql            the queries as a Keal module over libpq
+//   keal src/main.keal tokens file.kealsql                  the tokens, one per line, KealSql's keywords marked
 //   keal src/main.keal --schema file.kealsql                only the CREATEs: enums, tables, views
 //   keal src/main.keal --queries file.kealsql               only what a session loads: functions and PREPAREs
 //
@@ -28,6 +29,7 @@ func usage(): Nothing {
     println("       kealsql --plkeal DIR <file.kealsql>")
     println("       kealsql --lib PATH <file.kealsql>")
     println("       kealsql --client DIR <file.kealsql>")
+    println("       kealsql tokens <file.kealsql>          the tokens, for an editor")
     println("       kealsql --schema <file.kealsql>        the CREATEs only")
     println("       kealsql --queries <file.kealsql>       the functions and PREPAREs only")
     exit(2)
@@ -41,6 +43,7 @@ var plkealDir = ""
 var clientDir = ""
 var onlySchema = false
 var onlyQueries = false
+var tokens = false
 var lib = ""
 val argv = args()
 var i = 0
@@ -50,6 +53,7 @@ while (i < argv.size) {
         "--migrate" -> { migrate = true }
         "--destructive" -> { destructive = true }
         "--schema" -> { onlySchema = true }
+        "tokens" -> { if (path != "") { usage() }; tokens = true }
         "--queries" -> { onlyQueries = true }
         "--db" -> {
             i += 1
@@ -91,6 +95,10 @@ if (source == null) {
 // lexer already treats `\r` as blank, but a stored function's body is
 // sliced out of the source as text, and would carry the `\r` into the
 // generated program.
+if (tokens) {
+    for (l in tokenLines(source)) { println(l) }
+    exit(0)
+}
 val program = parseFile(path, source.replace("\r\n", "\n"))
 val compiler = Compiler(path, program)
 compiler.lib = lib

@@ -47,6 +47,17 @@ check() {
 }
 for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
 for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
+# `kealsql tokens FILE` must print exactly tests/tokens/NAME.tokens
+for f in tests/tokens/*.tokens; do
+    [ -f "$f" ] || continue
+    name=$(basename "${f%.tokens}"); src=$(ls tests/cases/$name.kealsql tests/plkeal/$name.kealsql 2>/dev/null | head -1)
+    out=$($RUN tokens "$src" 2>&1); code=$?
+    out=$(printf '%s' "$out" | tr -d '\r')
+    if [ -n "$UPDATE" ] && [ -z "$TAG" ]; then printf '%s\n' "$out" > "$f"; fi
+    if [ "$code" = 0 ] && printf '%s\n' "$out" | diff -u "$f" - > /dev/null; then echo "ok   $TAG$src tokens"
+    else echo "FAIL $TAG$src tokens"; printf '%s\n' "$out" | diff -u "$f" - | head -10; failed=1
+    fi
+done
 
 # ---- the compiler itself, compiled natively, must answer the same bytes
 NATIVE=$(mktemp -d)/kealsql
@@ -54,6 +65,12 @@ if "$KEAL" build src/main.keal -o "$NATIVE" > "$NATIVE.log" 2>&1; then
     RUN="$NATIVE"; TAG="[native] "
     for f in tests/cases/*.kealsql examples/*.kealsql; do check "$f" "${f%.kealsql}.sql" 0; done
     for f in tests/errors/*.kealsql; do check "$f" "${f%.kealsql}.err" 1; done
+    for f in tests/tokens/*.tokens; do
+        [ -f "$f" ] || continue
+        name=$(basename "${f%.tokens}"); src=$(ls tests/cases/$name.kealsql tests/plkeal/$name.kealsql 2>/dev/null | head -1)
+        out=$($RUN tokens "$src" 2>&1 | tr -d '\r')
+        if printf '%s\n' "$out" | diff -u "$f" - > /dev/null; then echo "ok   $TAG$src tokens"; else echo "FAIL $TAG$src tokens"; failed=1; fi
+    done
     RUN="$KEAL src/main.keal"; TAG=""
     export KEALSQL="$NATIVE"              # what `import "./x.kealsql"` runs, below
 else

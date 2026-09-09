@@ -505,9 +505,17 @@ kealsql --migrate file.kealsql [--db NAME] [--destructive]
 kealsql --plkeal DIR file.kealsql                      the stored functions as DIR/<stem>.keal and DIR/build.sh
 kealsql --lib PATH file.kealsql                        the SQL, its CREATE FUNCTIONs naming that library
 kealsql --client DIR file.kealsql                      the queries as DIR/<stem>.client.keal, a module over libpq
+kealsql tokens file.kealsql                            the tokens, one per line, for an editor
 kealsql --schema file.kealsql                          the CREATEs only: enums, tables, views — loaded once
 kealsql --queries file.kealsql                         the functions and PREPAREs only — what a session loads
 ```
+
+`tokens` prints `line:col kind text` per token in the form of `keal tokens`
+— Keal's own lexer, with `===` and `!==` as one token each and KealSql's
+contextual words marked `keyword` where they are keywords, by the same
+lookahead the parser applies. It is lexical: a file that does not parse
+still gets its tokens, which is what an editor colouring as you type
+needs. Kealler, the Keal IDE, reads it rather than keeping a list.
 
 Without a flag, the SQL is both. The split follows PostgreSQL: the
 `CREATE`s are permanent and would fail a second time, the `PREPARE`s live
