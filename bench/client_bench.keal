@@ -1,0 +1,13 @@
+// A: the same query, 20 000 times, through the KealSql client.
+import "./blog.kealsql"
+
+val db = connectBlog("")
+val n = 20000
+var rows = 0
+var i = 0
+while (i < n) {
+    rows += db.byAuthor("ada").size
+    i += 1
+}
+println("client: ${n} calls, ${rows} rows")
+db.close()

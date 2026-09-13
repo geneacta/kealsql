@@ -1,0 +1,16 @@
+machine: aarch64, 6 cores, Linux, PostgreSQL 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1), keal 1.3.0
+A. 20 000 calls of byAuthor('ada') — 5 rows each, one connection
+  psql EXECUTE, one script:            2102 ms
+  KealSql client (Keal, libpq):        2097 ms
+  C over libpq, prepared:              2068 ms
+  C over libpq, text each time:        2648 ms
+B. steps(n) over 300000 rows — a loop of integer arithmetic
+  plkeal (Keal, LANGUAGE C):           187 ms
+  PL/pgSQL:                            4258 ms
+  C, hand-written:                     81 ms
+C. vowels(s) over 300000 rows — a loop over the characters of a 40-character text
+  plkeal (Keal, LANGUAGE C):           974 ms
+  PL/pgSQL:                            3735 ms
+  SQL, translate():                    329 ms
+  C, hand-written:                     45 ms
+  (loop only, no rows)                 36 ms

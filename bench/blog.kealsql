@@ -1,0 +1,42 @@
+// The benchmark's file: the blog of the suite, plus two stored functions
+// whose work is a loop — the kind of thing a procedural language is for.
+
+enum Status { Draft, Published }
+
+table User {
+    id:    Id
+    name:  Slug
+    email: String?
+}
+
+table Post {
+    id:      Id
+    cascade author: RefId<User>
+    title:   String
+    status:  Status
+}
+
+func byAuthor(name: String): List<(Int, String)> {
+    from(Post as p).where(p.author.name == name and status == Published).orderBy(p.id).select(p.id, p.title)
+}
+
+func newUser(name: String): User { insert(User(name = name)) }
+proc newPost(author: Int, title: String, status: Status) { insert(Post(author = author, title = title, status = status)) }
+
+// The number of Collatz steps from n to 1: integer arithmetic, a loop, nothing allocated.
+stored pure func steps(n: Int): Int {
+    var x = n
+    var k = 0
+    while (x != 1) {
+        x = if (x % 2 == 0) { x / 2 } else { 3 * x + 1 }
+        k += 1
+    }
+    return k
+}
+
+// The vowels of a text: a loop over characters.
+stored pure func vowels(s: String): Int {
+    var k = 0
+    for (c in s) { if (c == "a" or c == "e" or c == "i" or c == "o" or c == "u") { k += 1 } }
+    return k
+}

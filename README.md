@@ -1,7 +1,7 @@
 <!-- kealsql-band:start -->
 <p align="right">
   <a href="https://github.com/geneacta/kealsql/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat&labelColor=2b2b2b"></a>
-  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-72%25-blue?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-71%25-blue?style=flat&labelColor=2b2b2b"></a>
   <a href="https://github.com/geneacta/keal/releases/tag/v1.3.0"><img alt="Keal" src="https://img.shields.io/badge/Keal-1.3.0-orange?style=flat&labelColor=2b2b2b"></a>
 </p>
 <!-- kealsql-band:end -->
@@ -73,6 +73,9 @@ server; nothing runs but the planner PostgreSQL already has.
   `Bool3`, `Id` / `Slug`, references, migrations.
 * [GRAMMAR.md](GRAMMAR.md) — the syntax, the well-formedness rules, and
   what each construct compiles to.
+* [bench/README.md](bench/README.md) — what it costs: the client against
+  `psql` and raw libpq, and Keal inside the server against PL/pgSQL, SQL
+  and C; `bench/run.sh` reproduces it.
 * [examples/shop.kealsql](examples/shop.kealsql) — a shop: six tables,
   two enums, twenty-odd queries and mutations, as an application would
   ship them; `shop.sql` is what they compile to and `shop.exec.sql` runs

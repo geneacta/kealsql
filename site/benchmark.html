@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark — KealSql</title>
+<meta name="description" content="KealSql measured: the client against psql and raw libpq, and Keal inside PostgreSQL against PL/pgSQL, SQL and C.">
+<link rel="canonical" href="https://geneacta.github.io/kealsql/benchmark.html">
+<link rel="alternate" hreflang="en" href="https://geneacta.github.io/kealsql/benchmark.html">
+<link rel="alternate" hreflang="fr" href="https://geneacta.github.io/kealsql/fr/benchmark.html">
+<link rel="alternate" hreflang="x-default" href="https://geneacta.github.io/kealsql/benchmark.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KealSql">
+<meta property="og:locale" content="en_GB">
+<meta property="og:title" content="Benchmark — KealSql">
+<meta property="og:description" content="KealSql measured: the client against psql and raw libpq, and Keal inside PostgreSQL against PL/pgSQL, SQL and C.">
+<meta property="og:url" content="https://geneacta.github.io/kealsql/benchmark.html">
+<meta property="og:image" content="https://geneacta.github.io/kealsql/assets/k.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Benchmark — KealSql">
+<meta name="twitter:description" content="KealSql measured: the client against psql and raw libpq, and Keal inside PostgreSQL against PL/pgSQL, SQL and C.">
+<meta name="twitter:image" content="https://geneacta.github.io/kealsql/assets/k.png">
+<link rel="icon" type="image/png" href="assets/k.png?v=9f91bd4e">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="nav">
+  <div class="nav-left">
+    <a class="mark" href="index.html">
+      <img class="mark-k" src="assets/k.png?v=9f91bd4e" alt="">
+      <span class="wordmark">keal<span class="suffix">sql</span></span>
+    </a>
+    <div class="nav-links"><a href="index.html">Home</a><a href="start.html">Getting started</a><a href="walkthrough.html">Step by step</a><a href="benchmark.html" class="tab-active">Benchmark</a><a href="docs.html">Docs</a></div>
+  </div>
+  <div class="nav-right">
+    <span class="badge">v0.1.0</span>
+    <a class="btn-lang" href="fr/benchmark.html">Français</a>
+    <a class="btn-keal" href="https://geneacta.github.io/keal/">Keal</a>
+    <a class="btn-gh" href="https://github.com/geneacta/kealsql">GitHub</a>
+  </div>
+</nav>
+<section class="band"><h1>What it costs.</h1><p class="lede">One PostgreSQL, three questions: does KealSql cost anything on the way to the database, and what does Keal inside the server cost against its neighbours, on arithmetic and on text. Every number is the best of three runs, on the machine named; the procedure is <a href="https://github.com/geneacta/kealsql/blob/main/bench/run.sh">bench/run.sh</a>, and the reading is in <a href="https://github.com/geneacta/kealsql/blob/main/bench/README.md">bench/README.md</a>.</p></section>
+<section class="band"><p class="cap">Machine : aarch64, 6 cores, Linux, PostgreSQL 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1), keal 1.3.0</p></section>
+<section class="band"><h2>On the way to the database</h2><p class="lede">The same query, 20 000 times on one connection: <code>psql</code> running <code>EXECUTE</code> from a script, the KealSql client — a Keal program over libpq — and a C program over libpq, prepared once or sending the text every time. The three prepared paths are within the run-to-run noise of each other (ten to twenty percent on a virtual machine): the time is the round trip and the server, and the client adds nothing that can be measured. Sending the SQL as text each time costs a quarter more — that is what preparing buys, and what the compiler does for every query.</p><div class="bars"><div class="barrow"><span class="bl">psql EXECUTE, one script</span><span class="bar"><div data-w="98.4%"></div></span><span class="bv">2 102 ms · 1.0×</span></div><div class="barrow"><span class="bl">KealSql client (Keal, libpq)</span><span class="bar"><div data-w="98.6%"></div></span><span class="bv">2 097 ms · 1.0×</span></div><div class="barrow"><span class="bl">C over libpq, prepared</span><span class="bar"><div data-w="100.0%"></div></span><span class="bv">2 068 ms · 1×</span></div><div class="barrow"><span class="bl">C over libpq, text each time</span><span class="bar"><div data-w="78.1%"></div></span><span class="bv">2 648 ms · 1.3×</span></div></div></section>
+<section class="band"><h2>Inside the server, on arithmetic</h2><p class="lede"><code>steps(n)</code>, the Collatz count, over 300 000 rows: the same loop as a Keal <code>stored func</code> — compiled through C into a <code>LANGUAGE C</code> function — in PL/pgSQL, and hand-written in C. Keal is about twenty times faster than PL/pgSQL and about two and a half times slower than the C: the difference is Keal's checked arithmetic and its loop, not the bridge, since an integer crosses as an integer.</p><div class="bars"><div class="barrow"><span class="bl">plkeal (Keal, LANGUAGE C)</span><span class="bar"><div data-w="43.3%"></div></span><span class="bv">187 ms · 2.3×</span></div><div class="barrow"><span class="bl">PL/pgSQL</span><span class="bar"><div data-w="1.9%"></div></span><span class="bv">4 258 ms · 52.6×</span></div><div class="barrow"><span class="bl">C, hand-written</span><span class="bar"><div data-w="100.0%"></div></span><span class="bv">81 ms · 1×</span></div></div></section>
+<section class="band"><h2>Inside the server, on text</h2><p class="lede"><code>vowels(s)</code>, a loop over the forty characters of each of 300 000 rows: Keal, PL/pgSQL, the SQL builtin <code>translate()</code>, and C. Keal is four times faster than PL/pgSQL and twenty times slower than C: iterating a string in Keal hands out one small string per character, a cost of the language measured elsewhere too — a loop over characters is where Keal is slowest. And <code>translate()</code> in one SQL expression beats the loop three to one: when a builtin does the job, use the builtin; KealSql exposes them.</p><div class="bars"><div class="barrow"><span class="bl">plkeal (Keal, LANGUAGE C)</span><span class="bar"><div data-w="4.6%"></div></span><span class="bv">974 ms · 21.6×</span></div><div class="barrow"><span class="bl">PL/pgSQL</span><span class="bar"><div data-w="1.2%"></div></span><span class="bv">3 735 ms · 83.0×</span></div><div class="barrow"><span class="bl">SQL, translate()</span><span class="bar"><div data-w="13.7%"></div></span><span class="bv">329 ms · 7.3×</span></div><div class="barrow"><span class="bl">C, hand-written</span><span class="bar"><div data-w="100.0%"></div></span><span class="bv">45 ms · 1×</span></div></div></section>
+<section class="band"><p class="lede">What is not here: another database. KealSql compiles to PostgreSQL and runs on nothing else, so a comparison with MySQL or SQLite would measure those servers, not this compiler.</p></section>
+<footer class="foot">
+  <div class="foot-l">A Keal-shaped language over PostgreSQL. Built by Geneacta.</div>
+  <div class="foot-r">
+    <a href="https://github.com/geneacta/kealsql">Source on GitHub</a>
+    <a href="design.html">Design</a>
+    <a href="grammar.html">Grammar</a>
+  </div>
+</footer>
+</div>
+<script src="site.js"></script>
+</body>
+</html>

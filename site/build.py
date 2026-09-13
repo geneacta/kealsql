@@ -25,6 +25,7 @@ SITE = os.path.join(ROOT, "site")
 sys.path.insert(0, SITE)
 import content as C  # noqa: E402
 import walk as WK  # noqa: E402
+import bench as B  # noqa: E402
 
 BASE_URL = "https://geneacta.github.io/kealsql/"
 
@@ -199,8 +200,8 @@ def markdown(text):
 # The way back to Keal's own site is the `btn-keal` badge on the right, as
 # keal-view has it, so the tabs are this site's pages only.
 NAV = {
-    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("walkthrough.html", "Step by step"), ("docs.html", "Docs")],
-    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("walkthrough.html", "Pas à pas"), ("docs.html", "Docs")],
+    "en": [("index.html", "Home"), ("start.html", "Getting started"), ("walkthrough.html", "Step by step"), ("benchmark.html", "Benchmark"), ("docs.html", "Docs")],
+    "fr": [("index.html", "Accueil"), ("start.html", "Premiers pas"), ("walkthrough.html", "Pas à pas"), ("benchmark.html", "Benchmark"), ("docs.html", "Docs")],
 }
 
 FOOTER = {
@@ -498,6 +499,11 @@ def walkthrough(lang, S):
     return page(lang, "walkthrough.html", t["title"], t["desc"], "\n".join(parts), active="walkthrough.html")
 
 
+def benchmark(lang):
+    t = B.TEXT[lang]
+    return page(lang, "benchmark.html", t["title"], t["desc"], B.body(lang), active="benchmark.html")
+
+
 def docs_index(lang):
     t = C.DOCS[lang]
     cards = "".join('<a class="card" href="%s"><h3>%s</h3><p>%s</p></a>' % (h, n, d) for h, n, d in t["pages"])
@@ -518,13 +524,14 @@ def main():
         written.append(write(lang, "index.html", landing(lang, S)))
         written.append(write(lang, "start.html", start(lang, S)))
         written.append(write(lang, "walkthrough.html", walkthrough(lang, S)))
+        written.append(write(lang, "benchmark.html", benchmark(lang)))
         written.append(write(lang, "docs.html", docs_index(lang)))
         for src, fn, title in (("DESIGN.md", "design.html", "Design"), ("GRAMMAR.md", "grammar.html", "Grammar"), ("README.md", "readme.html", "README")):
             written.append(write(lang, fn, doc_page(lang, src, fn, title)))
     # the sitemap and robots, as GitHub Pages wants them
     urls = []
     for lang in ("en", "fr"):
-        for fn in ("index.html", "start.html", "walkthrough.html", "docs.html", "design.html", "grammar.html", "readme.html"):
+        for fn in ("index.html", "start.html", "walkthrough.html", "benchmark.html", "docs.html", "design.html", "grammar.html", "readme.html"):
             urls.append(BASE_URL + ("" if lang == "en" else "fr/") + fn)
     with open(os.path.join(SITE, "sitemap.xml"), "w", encoding="utf-8", newline="") as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
