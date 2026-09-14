@@ -35,6 +35,8 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
 | `trait` | before a name: `trait Name { ... }`, Keal verbatim, for the programs that carry the rows |
+| `columns` `with` | `columns Audited { … }` declares a set of columns; `table Post with Audited { … }` takes it |
+| `covered` `by` | `covered(room, stay) by Tariff(room, nights)` inside a `table`: a temporal reference |
 | `view` `materialized` | before a name: `view Name { pipeline }`, `materialized view Name { … }` |
 | `schema` | `schema Name`, once, before the tables: every object of the file lives in that PostgreSQL schema |
 | `trigger` `on` `before` `after` | `trigger name on Table before|after insert|update|delete { ...Keal... }` |
@@ -49,8 +51,9 @@ too. A column may be called `select` if its author insists.
 
 ```
 File          = ( "schema" Ident )? Item* ;
-Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl | TraitDecl ;
+Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl | TraitDecl | ColumnSet ;
 TraitDecl     = "trait" Ident KealBody ;                 (* a Keal trait, verbatim *)
+ColumnSet     = "columns" Ident "{" Column* "}" ;        (* columns a table takes `with` *)
 ViewDecl      = "materialized"? "view" Ident "{" Pipeline "}" ;   (* ends in select, names its columns *)
 
 Import        = "import" String ( "as" Ident )? ;
@@ -79,7 +82,7 @@ have no schema; their names are as written.
 ## 3. Schema
 
 ```
-TableDecl     = Renamed? "table" Ident ( ":" Ident ( "," Ident )* )? "{" ( Column | TableRule | Method )* "}" ;
+TableDecl     = Renamed? "table" Ident ( ":" Ident ( "," Ident )* )? ( "with" Ident ( "," Ident )* )? "{" ( Column | TableRule | Method )* "}" ;
 Method        = ( "func" | "proc" ) ... KealBody ;      (* a method of the row, Keal verbatim *)
 Column        = ( Modifier | Renamed )* Ident ":" Type ( "=" Expr )? ;   (* `= expr`: the DEFAULT *)
 Renamed       = "renamed" "(" Ident ")" ;                 (* the previous name, for the migration *)
@@ -88,7 +91,8 @@ TableRule     = "unique" "(" Ident ( "," Ident )+ ")"
               | "index" "(" Ident ( "," Ident )* ")"
               | "check" Ident "(" Expr ")"                (* named; the expression is over the table's columns *)
               | "noOverlap" "(" Ident ( "," Ident )* ")"  (* key columns, then the range: the ranges of one key never overlap *)
-              | "contiguous" "(" Ident ( "," Ident )* ")" ; (* the same, and no gap: a chain, judged at commit *)
+              | "contiguous" "(" Ident ( "," Ident )* ")"  (* the same, and no gap: a chain, judged at commit *)
+              | "covered" "(" Ident ( "," Ident )* ")" "by" Ident "(" Ident ( "," Ident )* ")" ; (* key columns then the range, on both sides: a temporal reference *)
 
 Type          = ( ScalarType | RefType ) "?"? ;
 ScalarType    = "Id" | "Slug" | "Serial" | "BigSerial"
@@ -133,6 +137,8 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `renamed(old)` at most once per column or table | twice |
 | `Range<T>` is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz` | another `T` |
 | the last column of `noOverlap` / `contiguous` is a `Range`, the others are not, none is optional | otherwise |
+| `covered(k…, r) by T(k…, r)`: as many columns on both sides, the same types, the last ones ranges, none optional; `T` has `noOverlap` or `contiguous` on exactly its columns | otherwise |
+| `with Set`: `Set` is a `columns` item; the table does not declare a column of the same name itself | otherwise |
 
 ### What it compiles to
 
@@ -159,6 +165,8 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `stay: Range<Date>` | `stay daterange NOT NULL` |
 | `noOverlap(room, stay)` | `CONSTRAINT booking_room_stay_excl EXCLUDE USING gist (room WITH =, stay WITH &&)`, with `btree_gist` |
 | `contiguous(room, nights)` | the exclusion above, plus a deferred constraint trigger that refuses a gap between the ranges of one key at commit, and a `BEFORE INSERT` trigger that closes the open range (`rangeFrom(x)`) where the next one starts |
+| `covered(room, stay) by Tariff(room, nights)` | `FOREIGN KEY (room, PERIOD stay) REFERENCES tariff (room, PERIOD nights)` — and the target's `noOverlap(room, nights)` becomes `CONSTRAINT tariff_room_nights_key UNIQUE (room, nights WITHOUT OVERLAPS)`, the temporal key PostgreSQL 18 asks for |
+| `table Post with Audited { … }` | the columns of `columns Audited { … }` appended to the table's own, in order — one column set is one set of `ALTER TABLE ADD COLUMN`s in the migration when a table takes it later |
 | `Ref<T.c>` column | the type of `c`; `REFERENCES t(c)` |
 
 **Naming.** Identifiers are emitted in `snake_case`, unquoted: `fullName` →

@@ -39,7 +39,17 @@ package class ColumnN(package val name: String, package val ty: TypeN, package v
 
 /// `noOverlap(key…, range)` and `contiguous(key…, range)` inside a table: the
 /// ranges of one key may not overlap; and, for `contiguous`, may leave no gap.
-package class RuleN(package val kind: String, package val cols: List<String>, package val line: Int, package val col: Int)
+/// `covered(key…, range) by Other(key…, range)`: a temporal reference — every
+/// point of the range is covered by the other table's ranges for that key.
+package class RuleN(package val kind: String, package val cols: List<String>, package val line: Int, package val col: Int) {
+    package var refTable: String = ""        // covered … by
+    package var refCols: List<String> = []
+}
+
+/// `columns Name { ... }`: a set of columns a table takes `with`.
+package class ColumnSetN(package val name: String, package val line: Int, package val col: Int) {
+    package var columns: List<ColumnN> = []
+}
 
 /// `check name(expr)` inside a table.
 package class CheckN(package val name: String, package val ex: Ex, package val line: Int, package val col: Int)
@@ -49,6 +59,7 @@ package class TableN(package val name: String, package val line: Int, package va
     package var checks: List<CheckN> = []
     package var rules: List<RuleN> = []      // noOverlap(k, r), contiguous(k, r)
     package var traits: List<String> = []    // `table User : Named, Show { ... }`
+    package var mixins: List<String> = []    // `table Post with Audited { ... }`
     package var methods: List<String> = []   // `func` / `proc` declarations inside the table, verbatim Keal
     package var indexes: List<List<String>> = []   // index(a, b)
     package var renamedFrom: String = ""     // `renamed(Old) table Name { ... }`
@@ -126,6 +137,7 @@ package class TriggerN(package val name: String, package val table: String, pack
 package class TraitN(package val name: String, package val text: String, package val line: Int, package val col: Int)
 
 package class ProgramN() {
+    package var columnSets: List<ColumnSetN> = []
     package var traits: List<TraitN> = []
     package var schema: String = ""          // `schema name`: every object of the file lives there; "" is public
     package var triggers: List<TriggerN> = []

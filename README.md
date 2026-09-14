@@ -1,7 +1,7 @@
 <!-- kealsql-band:start -->
 <p align="right">
   <a href="https://github.com/geneacta/kealsql/releases"><img alt="version" src="https://img.shields.io/badge/version-0.1.0-blue?style=flat&labelColor=2b2b2b"></a>
-  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-72%25-blue?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://github.com/geneacta/kealsql/tree/main/src"><img alt="written in Keal" src="https://img.shields.io/badge/written%20in%20Keal-73%25-blue?style=flat&labelColor=2b2b2b"></a>
   <a href="https://github.com/geneacta/keal/releases/tag/v1.3.0"><img alt="Keal" src="https://img.shields.io/badge/Keal-1.3.0-orange?style=flat&labelColor=2b2b2b"></a>
 </p>
 <!-- kealsql-band:end -->
@@ -214,9 +214,9 @@ Keal's own, imported from the `keal` dependency pinned in `keal.toml`;
 ## Status
 
 v1 covers the schema (`schema`, `table`, `enum`, keys, references, `on delete`,
-defaults, named checks, indexes, arrays, `Range<T>` with `noOverlap` and
-`contiguous`, `Decimal`, `Timestamptz`, `Json` and the other common
-types), the DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
+defaults, named checks, indexes, arrays, `Range<T>` with `noOverlap`,
+`contiguous` and temporal references (`covered … by`), column sets,
+`Decimal`, `Timestamptz`, `Json` and the other common types), the DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` /
 `orderBy` / `groupBy` / `distinct` / `limit` / `offset`, `fullJoin` /
 `crossJoin`, `union` / `intersect` / `except`, the terminals `select` /
 `count` / `exists` with `first` / `single`, subqueries through `val`-bound

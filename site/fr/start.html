@@ -72,6 +72,9 @@ table Post {
     title:    String
     status:   Status
     created:  Timestamp
+
+    // A method on the row, for the programs that read it.
+    func headline(): String { &quot;${this.title} [${this.status}]&quot; }
 }
 
 func byAuthor(name: String): List&lt;(Int, String)&gt; {
@@ -185,6 +188,7 @@ show(&quot;ada before&quot;, db.byAuthor(&quot;ada&quot;))
 println(&quot;drafts: ${db.drafts()}&quot;)
 val published = db.publish(2)
 println(&quot;published: ${published.title} (${published.status})&quot;)
+println(&quot;headline: ${published.headline()}&quot;)
 println(&quot;drafts now: ${db.drafts()}&quot;)
 show(&quot;ada after&quot;, db.byAuthor(&quot;ada&quot;))
 val editor = db.editorOf(1)
@@ -206,6 +210,7 @@ ada before: 1 post(s)
   #1 Hello
 drafts: 1
 published: Draft one (Published)
+headline: Draft one [Published]
 drafts now: 0
 ada after: 2 post(s)
   #2 Draft one

@@ -116,6 +116,17 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val cols = u.map({ snakeName(it) })
             out.add(LiveConstraint("u", "${tn}_${cols.join("_")}_key", cols))
         }
+        for (r in t.decl.rules) {
+            if (r.kind == "covered") {
+                val k = LiveConstraint("f", "${tn}_${r.cols.map({ snakeName(it) }).join("_")}_fkey", r.cols.map({ snakeName(it) }))
+                k.refTable = snakeName(r.refTable)
+                k.refCols = r.refCols.map({ snakeName(it) })
+                out.add(k)
+            } else if (this.compiler.targetedBy(t, r)) {
+                val cols = r.cols.map({ snakeName(it) })
+                out.add(LiveConstraint("u", "${tn}_${cols.join("_")}_key", cols))
+            }
+        }
         return out
     }
 
@@ -125,12 +136,45 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         return a.refTable == b.refTable and a.refCols.join(",") == b.refCols.join(",") and a.onDelete == b.onDelete and a.onUpdate == b.onUpdate
     }
 
+    /// Whether a wanted unique on `tn` is a temporal one: its last column is a
+    /// range the declaration marks as a covered target.
+    func temporalUnique(tn: String, k: LiveConstraint): Bool {
+        for (name in this.schema().tableOrder) {
+            val t = this.schema().tables[name]!!
+            if (snakeName(t.name) != tn) { continue }
+            for (r in t.decl.rules) {
+                if (r.kind != "covered" and r.cols.map({ snakeName(it) }).join(",") == k.cols.join(",") and this.compiler.targetedBy(t, r)) { return true }
+            }
+        }
+        return false
+    }
+
+    func temporalRef(tn: String, k: LiveConstraint): Bool {
+        for (name in this.schema().tableOrder) {
+            val t = this.schema().tables[name]!!
+            if (snakeName(t.name) != tn) { continue }
+            for (r in t.decl.rules) {
+                if (r.kind == "covered" and r.cols.map({ snakeName(it) }).join(",") == k.cols.join(",")) { return true }
+            }
+        }
+        return false
+    }
+
     func constraintSql(tn: String, k: LiveConstraint): String {
         val cols = k.cols.map({ quoteIf(it) }).join(", ")
         val body = when (k.kind) {
             "p" -> "PRIMARY KEY (${cols})"
-            "u" -> "UNIQUE (${cols})"
-            else -> "FOREIGN KEY (${cols}) REFERENCES ${qual(this.schema(), k.refTable)}(${k.refCols.map({ quoteIf(it) }).join(", ")}) ON DELETE ${this.actionWord(k.onDelete)} ON UPDATE ${this.actionWord(k.onUpdate)}"
+            "u" -> if (k.name.endsWith("_key") and this.temporalUnique(tn, k)) { "UNIQUE (${cols} WITHOUT OVERLAPS)" } else { "UNIQUE (${cols})" }
+            else -> {
+                if (this.temporalRef(tn, k)) {
+                    val n = k.cols.size
+                    val c2 = k.cols.take(n - 1).map({ quoteIf(it) }) ; c2.add("PERIOD " + quoteIf(k.cols[n - 1]))
+                    val r2 = k.refCols.take(n - 1).map({ quoteIf(it) }) ; r2.add("PERIOD " + quoteIf(k.refCols[n - 1]))
+                    "FOREIGN KEY (${c2.join(", ")}) REFERENCES ${qual(this.schema(), k.refTable)} (${r2.join(", ")})"
+                } else {
+                    "FOREIGN KEY (${cols}) REFERENCES ${qual(this.schema(), k.refTable)}(${k.refCols.map({ quoteIf(it) }).join(", ")}) ON DELETE ${this.actionWord(k.onDelete)} ON UPDATE ${this.actionWord(k.onUpdate)}"
+                }
+            }
         }
         return "ALTER TABLE ${qual(this.schema(), tn)} ADD CONSTRAINT ${k.name} ${body};"
     }
@@ -349,11 +393,12 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             }
         }
         // Exclusions (noOverlap): by name, like checks.
-        val exclNames = t.decl.rules.map({ this.compiler.excludeName(t, it) })
+        val exclNames = t.decl.rules.filter({ it.kind != "covered" and not this.compiler.targetedBy(t, it) }).map({ this.compiler.excludeName(t, it) })
         for (k in lt.constraints) {
             if (k.kind == "x" and not exclNames.contains(k.name)) { this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};") }
         }
         for (r in this.compiler.exclusions(t)) {
+            if (this.compiler.targetedBy(t, r)) { continue }
             val name = this.compiler.excludeName(t, r)
             unless (lt.constraints.any({ it.kind == "x" and it.name == name })) {
                 if (r.cols.size > 1) { this.add("CREATE EXTENSION IF NOT EXISTS btree_gist;") }

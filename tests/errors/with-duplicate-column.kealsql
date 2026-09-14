@@ -1,0 +1,5 @@
+columns Audited { created: Timestamptz = now() }
+table Post with Audited {
+    id:      Id
+    created: Date
+}

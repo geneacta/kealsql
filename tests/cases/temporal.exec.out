@@ -1,0 +1,15 @@
+name|note
+blue|sea view
+red|
+(2 rows)
+guest|lower|upper
+ada|3|15
+(1 row)
+psql:tests/cases/temporal.exec.sql:10: ERROR:  insert or update on table "stay" violates foreign key constraint "stay_room_nights_fkey"
+psql:tests/cases/temporal.exec.sql:11: ERROR:  insert or update on table "stay" violates foreign key constraint "stay_room_nights_fkey"
+guest|lower|upper
+ada|3|15
+(1 row)
+audited
+2
+(1 row)

@@ -152,6 +152,17 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 p.views.add(v)
             } else if (this.atWord("trigger") and this.peekAt(1).kind == "ident") {
                 p.triggers.add(this.triggerDecl())
+            } else if (this.atWord("columns") and this.peekAt(1).kind == "ident") {
+                val t = this.advance()
+                val cs = ColumnSetN(this.expectIdent("a name after `columns`"), t.line, t.col)
+                this.expect("{", "after the column set's name")
+                this.skipSemis()
+                while (not this.at("}")) {
+                    cs.columns.add(this.column())
+                    this.skipSemis()
+                }
+                this.expect("}", "to close the column set")
+                p.columnSets.add(cs)
             } else if (this.atWord("trait") and this.peekAt(1).kind == "ident") {
                 val t = this.peek()
                 val start = this.pos
@@ -196,6 +207,12 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
             tab.traits.add(this.expectIdent("a trait's name after `:`"))
             while (this.eat(",")) { tab.traits.add(this.expectIdent("a trait's name")) }
         }
+        if (this.atWord("with")) {
+            // the column sets the table takes
+            this.advance()
+            tab.mixins.add(this.expectIdent("a column set's name after `with`"))
+            while (this.eat(",")) { tab.mixins.add(this.expectIdent("a column set's name")) }
+        }
         this.expect("{", "after the table's name")
         this.skipSemis()
         while (not this.at("}")) {
@@ -203,6 +220,18 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 tab.uniques.add(this.uniqueConstraint())
             } else if (this.atWord("index") and this.peekAt(1).kind == "(") {
                 tab.indexes.add(this.columnList("index"))
+            } else if (this.atWord("covered") and this.peekAt(1).kind == "(") {
+                val t = this.peek()
+                val cols = this.columnList("covered")
+                unless (this.atWord("by")) { this.failHere("expected `by Table(columns)` after `covered(...)`") }
+                this.advance()
+                val r = RuleN("covered", cols, t.line, t.col)
+                r.refTable = this.expectIdent("a table after `by`")
+                this.expect("(", "after the table's name")
+                r.refCols.add(this.expectIdent("a column name"))
+                while (this.eat(",")) { r.refCols.add(this.expectIdent("a column name")) }
+                this.expect(")", "to close the referenced columns")
+                tab.rules.add(r)
             } else if ((this.atWord("noOverlap") or this.atWord("contiguous")) and this.peekAt(1).kind == "(") {
                 val t = this.peek()
                 val cols = this.columnList(t.text)
@@ -731,7 +760,9 @@ package func keywordAt(toks: List<Token>, i: Int): Bool {
     val nextIdent = i + 1 < toks.size and next.kind == "ident"
     return when (t.text) {
         "unknown" -> true
-        "table", "enum", "schema", "trigger", "trait" -> nextIdent
+        "table", "enum", "schema", "trigger", "trait", "columns", "with" -> nextIdent
+        "covered" -> next.kind == "("
+        "by" -> nextIdent and i > 0 and prev.kind == ")"
         "view" -> nextIdent or (i > 0 and prev.kind == "ident" and prev.text == "materialized")
         "materialized" -> nextIdent and next.text == "view"
         "stored" -> next.kind == "func" or next.kind == "proc" or (nextIdent and next.text == "pure")

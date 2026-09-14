@@ -1,0 +1,13 @@
+table Room { id: Id
+    name: Slug }
+table Tariff {
+    id:     Id
+    cascade room: RefId<Room>
+    nights: Range<Int>
+    noOverlap(room, nights)
+}
+table Stay {
+    id:     Id
+    cascade room: RefId<Room>
+    nights: Range<Int>
+}

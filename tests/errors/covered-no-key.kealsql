@@ -1,0 +1,11 @@
+table Tariff {
+    id:     Id
+    room:   Int
+    nights: Range<Int>
+}
+table Stay {
+    id:     Id
+    room:   Int
+    nights: Range<Int>
+    covered(room, nights) by Tariff(room, nights)
+}

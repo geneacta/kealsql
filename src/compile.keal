@@ -194,6 +194,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             }
         }
         for (r in table.decl.rules) {
+            if (r.kind == "covered") { this.checkCovered(table, r); continue }
             var k = 0
             for (n in r.cols) {
                 val c = table.column(n)
@@ -207,10 +208,63 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         }
     }
 
+    /// `covered(k, r) by T(k2, r2)`: a temporal reference. Every point of `r`
+    /// is covered by the ranges of `T` for the key — which needs `T` to have
+    /// `noOverlap` or `contiguous` on exactly those columns, so that its
+    /// unique key is `WITHOUT OVERLAPS` (PostgreSQL 18).
+    proc checkCovered(t: Table, r: RuleN) {
+        val target = this.schema.tables[r.refTable]
+        if (target == null or target.isView) { this.fail(r.line, r.col, "`${r.refTable}` is not a table") }
+        if (r.cols.size != r.refCols.size or r.cols.size < 2) { this.fail(r.line, r.col, "`covered(...) by ${r.refTable}(...)` names the same number of columns on both sides, the range last") }
+        var k = 0
+        while (k < r.cols.size) {
+            val c = t.column(r.cols[k])
+            val rc = target.column(r.refCols[k])
+            if (c == null) { this.fail(r.line, r.col, "`${t.name}` has no column `${r.cols[k]}`") }
+            if (rc == null) { this.fail(r.line, r.col, "`${r.refTable}` has no column `${r.refCols[k]}`") }
+            val last = k == r.cols.size - 1
+            if (last and (rangeElem(c.scalar) == "" or rangeElem(rc.scalar) == "")) { this.fail(r.line, r.col, "the last columns of `covered ... by` are the ranges") }
+            unless (this.sameType(c.ty(), rc.ty())) { this.fail(r.line, r.col, "`${r.cols[k]}` is `${this.renderTy(c.ty())}` and `${r.refTable}.${r.refCols[k]}` is `${this.renderTy(rc.ty())}`") }
+            if (c.optional) { this.fail(r.line, r.col, "`${r.cols[k]}` is optional; a column of `covered(...)` is not") }
+            k += 1
+        }
+        unless (target.decl.rules.any({ (it.kind == "noOverlap" or it.kind == "contiguous") and it.cols.join(",") == r.refCols.join(",") })) {
+            this.fail(r.line, r.col, "`${r.refTable}` needs `noOverlap(${r.refCols.join(", ")})` (or `contiguous`) for `covered ... by` to reference it")
+        }
+    }
+
+    /// Whether a table's ranges are what some `covered … by` points at: then its
+    /// rule is a `UNIQUE (… WITHOUT OVERLAPS)` rather than an exclusion.
+    package func targetedBy(t: Table, r: RuleN): Bool {
+        for (name in this.schema.tableOrder) {
+            for (o in this.schema.tables[name]!!.decl.rules) {
+                if (o.kind == "covered" and o.refTable == t.name and o.refCols.join(",") == r.cols.join(",")) { return true }
+            }
+        }
+        return false
+    }
+
+    package func coveredSql(t: Table, r: RuleN): String {
+        val cols: List<String> = []
+        val refs: List<String> = []
+        var k = 0
+        while (k < r.cols.size) {
+            val last = k == r.cols.size - 1
+            cols.add((if (last) { "PERIOD " } else { "" }) + sqlName(r.cols[k]))
+            refs.add((if (last) { "PERIOD " } else { "" }) + sqlName(r.refCols[k]))
+            k += 1
+        }
+        return "FOREIGN KEY (${cols.join(", ")}) REFERENCES ${qualName(this.schema, r.refTable)} (${refs.join(", ")})"
+    }
+
     /// `noOverlap(k, r)`: an exclusion constraint — the ranges of one key never
     /// overlap. Equality on a scalar in a GiST index needs btree_gist.
     package func excludeName(t: Table, r: RuleN): String { "${snakeName(t.name)}_${r.cols.map({ snakeName(it) }).join("_")}_excl" }
     package func excludeSql(t: Table, r: RuleN): String {
+        if (this.targetedBy(t, r)) {
+            // the temporal unique key a covered … by needs (PostgreSQL 18)
+            return "CONSTRAINT ${snakeName(t.name)}_${r.cols.map({ snakeName(it) }).join("_")}_key UNIQUE (${r.cols.map({ sqlName(it) }).join(", ")} WITHOUT OVERLAPS)"
+        }
         val parts: List<String> = []
         var k = 0
         for (n in r.cols) {
@@ -225,6 +279,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         val out: List<RuleN> = []
         val names: List<String> = []
         for (r in t.decl.rules) {
+            if (r.kind == "covered") { continue }
             val n = this.excludeName(t, r)
             unless (names.contains(n)) { names.add(n); out.add(r) }
         }
@@ -233,7 +288,8 @@ package class Compiler(package val file: String, package val program: ProgramN) 
 
     package func needsBtreeGist(): Bool {
         for (name in this.schema.tableOrder) {
-            for (r in this.schema.tables[name]!!.decl.rules) { if (r.cols.size > 1) { return true } }
+            val t = this.schema.tables[name]!!
+            for (r in t.decl.rules) { if (r.kind != "covered" and r.cols.size > 1) { return true } }
         }
         return false
     }
@@ -387,6 +443,15 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     }
 
     proc resolveColumns(var table: Table) {
+        // The column sets the table takes come after its own columns, in order.
+        for (m in table.decl.mixins) {
+            val cs = this.program.columnSets.find({ it.name == m })
+            if (cs == null) { this.fail(table.decl.line, table.decl.col, "`${m}` is not a column set; `columns ${m} { ... }` declares one") }
+            for (c in cs.columns) {
+                if (table.decl.columns.any({ it.name == c.name })) { this.fail(table.decl.line, table.decl.col, "`${table.name}` declares `${c.name}` itself and takes it from `${m}`") }
+                table.decl.columns.add(c)
+            }
+        }
         for (c in table.decl.columns) {
             if (table.column(c.name) != null) { this.fail(c.line, c.col, "column `${c.name}` is declared twice in `${table.name}`") }
             val col = Column(c.name, c)
@@ -534,6 +599,9 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         for (c in t.columns) {
             if (c.refTable != "" and c.refTable != name) { this.visitTable(c.refTable, done, visiting) }
         }
+        for (r in t.decl.rules) {
+            if (r.kind == "covered" and r.refTable != name) { this.visitTable(r.refTable, done, visiting) }
+        }
         visiting.removeAt(visiting.size - 1)
         done.add(name)
     }
@@ -553,6 +621,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
             for (ch in t.decl.checks) { lines.add("    CONSTRAINT ${snakeName(t.name)}_${snakeName(ch.name)}_check CHECK (${this.checkSql(t, ch)})") }
             for (r in this.exclusions(t)) { lines.add("    " + this.excludeSql(t, r)) }
+            for (r in t.decl.rules) { if (r.kind == "covered") { lines.add("    " + this.coveredSql(t, r)) } }
             out += lines.join(",\n") + "\n);\n"
             for (ix in this.indexesOf(t)) { out += this.indexDdl(t, ix) + "\n" }
             for (r in t.decl.rules) { if (r.kind == "contiguous") { out += this.contiguousDdl(t, r) } }

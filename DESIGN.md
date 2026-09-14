@@ -288,6 +288,17 @@ that carry them with a default representation:
   compile error. Composite primary keys are excluded — a table that wants one
   uses an `Id` plus `unique(a, b)`. This is a door deliberately closed; it is
   what keeps `RefId` total.
+
+  It is also the efficient replacement, not a workaround. A composite
+  primary key is paid for by every table that references it — two or three
+  columns per foreign key, a wider join key, a composite index on each side
+  — and the `unique(a, b)` on the surrogate table gives exactly the
+  guarantee the composite key gave (one row per pair) at the cost of one
+  index, which the composite key needed anyway. What is lost is naming the
+  pair from another table: `Ref<T.(a, b)>` would be the day a real schema
+  asks for it; nothing in the model forbids it. The one composite reference
+  that has no single-column equivalent — a key *and* a range — is the
+  temporal one, below.
 * **Zero or one slug**: a `UNIQUE NOT NULL` text column, the table's
   *natural key* — the primary being the surrogate key. Being unique per table
   is what makes `RefSlug<T>` unambiguous without naming a column, and what
@@ -385,6 +396,30 @@ And the chain closes itself: a range written without an end,
 closed at `x` by a `BEFORE INSERT` trigger. That is the versioning
 pattern — a tariff, a price, an address valid from a date — without the
 application computing the previous row's end.
+
+A third rule points from one table to another: `covered(room, stay) by
+Tariff(room, nights)` in `Stay` says that every night of a stay falls in
+some tariff of its room — a **temporal reference**, PostgreSQL 18's
+`FOREIGN KEY (room, PERIOD stay) REFERENCES tariff (room, PERIOD nights)`.
+The target's `noOverlap` (or `contiguous`) on those columns is what makes
+the reference well defined — at most one tariff per night — and PostgreSQL
+asks for it as a temporal key, `UNIQUE (room, nights WITHOUT OVERLAPS)`,
+so that is what the compiler emits for a rule some `covered … by` points
+at, an exclusion constraint otherwise; the migration moves between the two.
+The referencing side is the ordinary foreign key rules: a stay outside
+every tariff is refused at the statement, and a tariff that a stay still
+depends on cannot be deleted.
+
+### Column sets
+
+`columns Audited { created: Timestamptz = now(); by: RefId<User>? }`
+declares columns without a table, and `table Post with Audited { … }`
+appends them to its own, in order, as if written there — the same column
+in ten tables written once. It is a copy, not an inheritance: the tables
+share nothing at run time, the SQL shows no trace of the set, and a
+migration sees columns. The word is `with`, not `:`, because `:` names the
+traits the *row* implements in the programs and this adds columns to the
+*table* — two things a class in Keal also keeps apart.
 
 ### Declarative schema, not sugared DDL
 
@@ -494,6 +529,8 @@ user, and the reason the language can stay small.
 
 ## 5. Open questions
 
+* Composite references (`Ref<T.(a, b)>`), if a real schema needs to name a
+  pair; see *Keys*.
 * `plkeal`: cells cross as text and are parsed on the Keal side; a binary
   path (`SPI_getbinval`) is the optimisation when a profile asks for it.
   A `pure` function that runs a query is declared `IMMUTABLE` wrongly, and

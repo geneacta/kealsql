@@ -1,0 +1,1 @@
+error tests/errors/covered-no-key.kealsql:10:5 `Tariff` needs `noOverlap(room, nights)` (or `contiguous`) for `covered ... by` to reference it

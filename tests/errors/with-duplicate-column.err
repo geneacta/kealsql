@@ -1,0 +1,1 @@
+error tests/errors/with-duplicate-column.kealsql:2:1 `Post` declares `created` itself and takes it from `Audited`

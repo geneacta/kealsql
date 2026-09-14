@@ -1,0 +1,44 @@
+// A column set taken by tables, and a temporal reference: every night of a
+// stay must be covered by a tariff of its room — PostgreSQL 18.
+
+columns Audited {
+    created: Timestamptz = now()
+    note:    String?
+}
+
+table Room with Audited {
+    id:   Id
+    name: Slug
+}
+
+table Tariff with Audited {
+    id:     Id
+    cascade room: RefId<Room>
+    nights: Range<Int>
+    cents:  Int
+    contiguous(room, nights)
+}
+
+table Stay {
+    id:     Id
+    cascade room: RefId<Room>
+    guest:  String
+    nights: Range<Int>
+    covered(room, nights) by Tariff(room, nights)
+}
+
+func noted(): List<(String, String?)> {
+    from(Room).orderBy(name).select(name, note)
+}
+
+func stays(room: Int): List<(String, Int?, Int?)> {
+    from(Stay).where(Stay.room == room).orderBy(guest).select(guest, nights.lower(), nights.upper())
+}
+
+proc price(room: Int, upTo: Int, fromNight: Int, cents: Int) {
+    insert(Tariff(room = room, nights = range(fromNight, upTo), cents = cents))
+}
+
+proc book(room: Int, guest: String, from: Int, to: Int) {
+    insert(Stay(room = room, guest = guest, nights = range(from, to)))
+}
