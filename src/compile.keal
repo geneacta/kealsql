@@ -101,6 +101,10 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         for (name in this.schema.tableOrder) { this.resolveReferences(this.schema.tables[name]!!) }
         for (name in this.schema.tableOrder) { this.resolveTableRules(this.schema.tables[name]!!) }
         for (v in this.program.views) { this.resolveView(v) }
+        for (tr in this.program.traits) {
+            if (this.program.traits.filter({ it.name == tr.name }).size > 1) { this.fail(tr.line, tr.col, "trait `${tr.name}` is declared twice") }
+            if (this.schema.tables.containsKey(tr.name) or this.schema.isEnum(tr.name)) { this.fail(tr.line, tr.col, "`${tr.name}` is already a table or an enum") }
+        }
         for (s in this.program.stored) { this.checkStored(s) }
         for (tr in this.program.triggers) {
             if (this.program.triggers.filter({ it.name == tr.name }).size > 1) { this.fail(tr.line, tr.col, "trigger `${tr.name}` is declared twice") }

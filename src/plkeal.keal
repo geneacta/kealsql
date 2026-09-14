@@ -105,9 +105,10 @@ package func plkealSource(compiler: Compiler): String {
         val elem = compiler.storedElem(s)
         if (schema.tables.containsKey(elem.name) and not rowTables.contains(elem.name)) { rowTables.add(elem.name) }
     }
+    for (tr in program.traits) { out += tr.text + "\n\n" }
     for (name in rowTables) {
         val t = schema.tables[name]!!
-        out += recordDecl(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }))
+        out += recordDeclOf(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }), t.decl.traits, t.decl.methods, "")
     }
     for (q in queries) {
         if (q.rowTable == "" and q.colTys.size > 1) {
@@ -522,14 +523,25 @@ func rowRecord(q: QueryInfo): String { q.name.take(1).toUpper() + q.name.drop(1)
 
 /// A row as a record. Keal's own toString serves (since keal 9709d1b, which
 /// fixed it for optional value fields).
-func recordDecl(name: String, fields: List<String>, types: List<String>): String {
+func recordDecl(name: String, fields: List<String>, types: List<String>): String { recordDeclOf(name, fields, types, [], [], "") }
+
+/// A row record with the traits it implements and the methods its table
+/// declares, verbatim; `vis` is "" or "public ", for the client.
+package func recordDeclOf(name: String, fields: List<String>, types: List<String>, traits: List<String>, methods: List<String>, vis: String): String {
     val decl: List<String> = []
     var i = 0
     while (i < fields.size) {
-        decl.add("val ${fields[i]}: ${types[i]}")
+        decl.add("${if (vis == "") { "" } else { "public " }}val ${fields[i]}: ${types[i]}")
         i += 1
     }
-    return "record ${name}(${decl.join(", ")})\n"
+    var out = "${vis}record ${name}(${decl.join(", ")})"
+    if (not traits.isEmpty()) { out += " : " + traits.join(", ") }
+    if (methods.isEmpty()) { return out + "\n" }
+    out += " {\n"
+    for (m in methods) {
+        for (l in lines(m)) { out += "    " + l + "\n" }
+    }
+    return out + "}\n"
 }
 
 /// The Keal function a stored function calls to run one of the file's queries.

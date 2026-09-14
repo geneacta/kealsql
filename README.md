@@ -220,7 +220,8 @@ types), the DDL, and queries: `from` / `where` / `unless` / `join` / `leftJoin` 
 `orderBy` / `groupBy` / `distinct` / `limit` / `offset`, `fullJoin` /
 `crossJoin`, `union` / `intersect` / `except`, the terminals `select` /
 `count` / `exists` with `first` / `single`, subqueries through `val`-bound
-fragments and `in`, `view`s and `materialized view`s, `recursive` common table expressions, window
+fragments and `in`, `view`s and `materialized view`s, rows as records with
+`trait`s and methods, `recursive` common table expressions, window
 functions, text, date, cast and json functions, the aggregates, `insert`
 of several rows with `onConflict`, `insertInto` from a query, `update` /
 `delete` through a `join`, `sql("...")` as the typed escape hatch, `when`,

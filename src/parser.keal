@@ -152,6 +152,13 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 p.views.add(v)
             } else if (this.atWord("trigger") and this.peekAt(1).kind == "ident") {
                 p.triggers.add(this.triggerDecl())
+            } else if (this.atWord("trait") and this.peekAt(1).kind == "ident") {
+                val t = this.peek()
+                val start = this.pos
+                this.advance()
+                val name = this.expectIdent("a name after `trait`")
+                if (not this.at("{")) { this.failHere("expected `{` to open the trait, found ${describeToken(this.peek())}") }
+                p.traits.add(TraitN(name, this.rawFrom(start), t.line, t.col))
             } else if (this.atWord("stored") and (this.peekAt(1).kind == "func" or this.peekAt(1).kind == "proc" or (this.peekAt(1).kind == "ident" and this.peekAt(1).text == "pure"))) {
                 p.stored.add(this.storedDecl())
             } else if (this.at("func")) {
@@ -184,6 +191,11 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
     func tableDecl(): TableN {
         val t = this.advance()                                 // `table`
         val tab = TableN(this.expectIdent("a name after `table`"), t.line, t.col)
+        if (this.eat(":")) {
+            // the traits the row implements, as a class writes them
+            tab.traits.add(this.expectIdent("a trait's name after `:`"))
+            while (this.eat(",")) { tab.traits.add(this.expectIdent("a trait's name")) }
+        }
         this.expect("{", "after the table's name")
         this.skipSemis()
         while (not this.at("}")) {
@@ -205,6 +217,9 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 tab.checks.add(CheckN(name, ex, t.line, t.col))
             } else if (this.atWord("check")) {
                 this.failHere("a check has a name: `check nonNegative(stock >= 0)`")
+            } else if (this.at("func") or this.at("proc")) {
+                // a method of the row: Keal, verbatim, from the keyword to the end of its body
+                tab.methods.add(this.rawFrom(this.pos))
             } else {
                 tab.columns.add(this.column())
             }
@@ -341,6 +356,26 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
         if (not this.at("{")) { this.failHere("expected `{` to open the trigger's body, found ${describeToken(this.peek())}") }
         tr.body = this.rawBody()
         return tr
+    }
+
+    /// The text from the token at `start` to the `}` that closes the first
+    /// `{` after it — a whole declaration, consumed.
+    func rawFrom(start: Int): String {
+        val first = this.toks[start]
+        while (not this.at("{")) {
+            if (this.at("eof") or this.at("}")) { this.fail(first.line, first.col, "the declaration opened here has no body") }
+            this.advance()
+        }
+        val open = this.advance()
+        var depth = 1
+        while (depth > 0) {
+            if (this.at("eof")) { this.fail(open.line, open.col, "the body opened here never closes") }
+            val k = this.advance().kind
+            if (k == "{") { depth += 1 }
+            if (k == "}") { depth -= 1 }
+        }
+        val close = this.toks[this.pos - 1]
+        return this.source.substring(this.offsetOf(first.line, first.col), this.offsetOf(close.line, close.col) + 1)
     }
 
     /// The text between the `{` ahead and its matching `}`, both consumed.
@@ -696,7 +731,7 @@ package func keywordAt(toks: List<Token>, i: Int): Bool {
     val nextIdent = i + 1 < toks.size and next.kind == "ident"
     return when (t.text) {
         "unknown" -> true
-        "table", "enum", "schema", "trigger" -> nextIdent
+        "table", "enum", "schema", "trigger", "trait" -> nextIdent
         "view" -> nextIdent or (i > 0 and prev.kind == "ident" and prev.text == "materialized")
         "materialized" -> nextIdent and next.text == "view"
         "stored" -> next.kind == "func" or next.kind == "proc" or (nextIdent and next.text == "pure")

@@ -2,10 +2,19 @@
 
 enum Status { Draft, Published }
 
-table User {
+// A row is a Keal record: it may implement a trait and carry methods, shared
+// by the stored functions and the client.
+trait Labelled {
+    func label(): String
+    func shout(): String { this.label().toUpper() }
+}
+
+table User : Labelled {
     id:    Id
     name:  Slug
     karma: Int
+
+    func label(): String { "${this.name} (${this.karma})" }
 }
 
 table Post {
@@ -51,11 +60,12 @@ stored func totalScore(name: String): Int {
     return sum
 }
 
-// Rows are records: fields by name, optional where the column is.
+// Rows are records: fields by name, optional where the column is — and
+// methods, and a trait's default.
 stored func describe(name: String): String {
     val u = userNamed(name)
     if (u == null) { throw "no user named " + name }
-    return "${u.name} has ${u.karma} karma and ${posts(u.id).size} posts" + (if (hasDrafts(u.id)) { ", some drafts" } else { "" })
+    return "${u.label()} has ${posts(u.id).size} posts" + (if (hasDrafts(u.id)) { ", some drafts" } else { "" }) + " / " + u.shout()
 }
 
 // A query error is a Keal exception: caught here, it stays inside.

@@ -48,6 +48,8 @@ package class TableN(package val name: String, package val line: Int, package va
     package var columns: List<ColumnN> = []
     package var checks: List<CheckN> = []
     package var rules: List<RuleN> = []      // noOverlap(k, r), contiguous(k, r)
+    package var traits: List<String> = []    // `table User : Named, Show { ... }`
+    package var methods: List<String> = []   // `func` / `proc` declarations inside the table, verbatim Keal
     package var indexes: List<List<String>> = []   // index(a, b)
     package var renamedFrom: String = ""     // `renamed(Old) table Name { ... }`
     package var uniques: List<List<String>> = []   // unique(a, b) constraints
@@ -120,7 +122,11 @@ package class TriggerN(package val name: String, package val table: String, pack
     package var body: String = ""
 }
 
+/// `trait Name { ... }`: Keal, verbatim, for the programs that carry the rows.
+package class TraitN(package val name: String, package val text: String, package val line: Int, package val col: Int)
+
 package class ProgramN() {
+    package var traits: List<TraitN> = []
     package var schema: String = ""          // `schema name`: every object of the file lives there; "" is public
     package var triggers: List<TriggerN> = []
     package var views: List<ViewN> = []

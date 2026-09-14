@@ -34,6 +34,7 @@ everywhere else, in the manner of Keal's `record` / `weak` / `enum`:
 | `primary` `slug` `unique` `cascade` `restrict` `setNull` | before a column name, inside a `table` |
 | `renamed` | `renamed(old)` before a column name, or before `table` |
 | `stored` `pure` | `stored [pure] func` — a function that runs inside PostgreSQL |
+| `trait` | before a name: `trait Name { ... }`, Keal verbatim, for the programs that carry the rows |
 | `view` `materialized` | before a name: `view Name { pipeline }`, `materialized view Name { … }` |
 | `schema` | `schema Name`, once, before the tables: every object of the file lives in that PostgreSQL schema |
 | `trigger` `on` `before` `after` | `trigger name on Table before|after insert|update|delete { ...Keal... }` |
@@ -48,7 +49,8 @@ too. A column may be called `select` if its author insists.
 
 ```
 File          = ( "schema" Ident )? Item* ;
-Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl ;
+Item          = Import | EnumDecl | TableDecl | ViewDecl | QueryDecl | MutationDecl | StoredDecl | TriggerDecl | TraitDecl ;
+TraitDecl     = "trait" Ident KealBody ;                 (* a Keal trait, verbatim *)
 ViewDecl      = "materialized"? "view" Ident "{" Pipeline "}" ;   (* ends in select, names its columns *)
 
 Import        = "import" String ( "as" Ident )? ;
@@ -57,6 +59,16 @@ EnumDecl      = "enum" Ident "{" Ident ( "," Ident )* ","? "}" ;
 
 An `import` brings another `.kealsql` file's tables and enums into scope,
 resolved relative to the importing file, loaded once — Keal's rule.
+
+A row is a Keal `record` wherever a program reads it — in a stored
+function through SPI, in the client through libpq — so a table may give
+its rows behaviour: `table User : Labelled { … func label(): String { … } }`
+names the traits the record implements and declares its methods, in Keal,
+verbatim, and a `trait Name { … }` item declares a trait beside the
+tables. KealSql reads the signatures of neither; it carries them into the
+generated programs, where Keal's checker holds them — a missing required
+method, or a wrong signature, is Keal's error, at the record. The SQL knows
+nothing of them: a method is not a column.
 
 `schema Billing` puts every table, enum, view, function and trigger of the
 file in the PostgreSQL schema `billing`: `CREATE SCHEMA IF NOT EXISTS`
@@ -67,7 +79,8 @@ have no schema; their names are as written.
 ## 3. Schema
 
 ```
-TableDecl     = Renamed? "table" Ident "{" ( Column | TableRule )* "}" ;
+TableDecl     = Renamed? "table" Ident ( ":" Ident ( "," Ident )* )? "{" ( Column | TableRule | Method )* "}" ;
+Method        = ( "func" | "proc" ) ... KealBody ;      (* a method of the row, Keal verbatim *)
 Column        = ( Modifier | Renamed )* Ident ":" Type ( "=" Expr )? ;   (* `= expr`: the DEFAULT *)
 Renamed       = "renamed" "(" Ident ")" ;                 (* the previous name, for the migration *)
 Modifier      = "primary" | "slug" | "unique" | "indexed" | "cascade" | "restrict" | "setNull" ;

@@ -237,7 +237,12 @@ error.
 ### `record` ↔ row
 
 A row *is* a Keal `record`: immutable fields, `==` comparing them one by
-one. There is no ORM layer because there is nothing to map.
+one. There is no ORM layer because there is nothing to map. And since it
+is a record, it may implement a trait and carry methods: a table names
+its traits after its name and declares `func`s among its columns, in
+Keal, and every program that reads the row — a stored function, the
+client — gets the same record with the same behaviour. KealSql does not
+read those bodies; Keal's checker does, where the record is.
 
 ## 3. Schema
 

@@ -14,6 +14,9 @@ table Post {
     title:    String
     status:   Status
     created:  Timestamp
+
+    // A method on the row, for the programs that read it.
+    func headline(): String { "${this.title} [${this.status}]" }
 }
 
 func byAuthor(name: String): List<(Int, String)> {

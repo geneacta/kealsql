@@ -2,10 +2,10 @@ total_score|total_score|total_score
 12|0|0
 (1 row)
 describe
-ada has 10 karma and 3 posts, some drafts
+ada (10) has 3 posts, some drafts / ADA (10)
 (1 row)
 describe
-bob has 0 karma and 0 posts
+bob (0) has 0 posts / BOB (0)
 (1 row)
 safe_award|safe_award
 awarded|nobody
