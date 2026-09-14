@@ -1,16 +1,25 @@
 machine: aarch64, 6 cores, Linux, PostgreSQL 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1), keal 1.3.0
 A. 20 000 calls of byAuthor('ada') — 5 rows each, one connection
-  psql EXECUTE, one script:            2102 ms
-  KealSql client (Keal, libpq):        2097 ms
-  C over libpq, prepared:              2068 ms
-  C over libpq, text each time:        2648 ms
+  psql EXECUTE, one script:            1234 ms
+  KealSql client (Keal, libpq):        843 ms
+  C over libpq, prepared:              967 ms
+  C over libpq, text each time:        2840 ms
 B. steps(n) over 300000 rows — a loop of integer arithmetic
-  plkeal (Keal, LANGUAGE C):           187 ms
-  PL/pgSQL:                            4258 ms
-  C, hand-written:                     81 ms
+  plkeal (Keal, LANGUAGE C):           193 ms
+  PL/pgSQL:                            4162 ms
+  C, hand-written:                     151 ms
 C. vowels(s) over 300000 rows — a loop over the characters of a 40-character text
-  plkeal (Keal, LANGUAGE C):           974 ms
-  PL/pgSQL:                            3735 ms
-  SQL, translate():                    329 ms
-  C, hand-written:                     45 ms
-  (loop only, no rows)                 36 ms
+  plkeal (Keal, LANGUAGE C):           1011 ms
+  PL/pgSQL:                            3514 ms
+  SQL, translate():                    315 ms
+  C, hand-written:                     62 ms
+  (loop only, no rows)                 44 ms
+D. the same 20 000 calls on other servers — each from its own C API, prepared once
+  PostgreSQL 18, libpq:                2254 ms
+  MariaDB 11.8, libmariadb:              2400 ms
+  SQLite 3.46.1, in the process:        394 ms
+E. steps(n) over 300000 rows on other servers — each in its own procedural language
+  PostgreSQL, plkeal (Keal):           243 ms
+  PostgreSQL, PL/pgSQL:                4904 ms
+  MariaDB, SQL/PSM function:           34195 ms
+  SQLite, a C function of the program: 93 ms
