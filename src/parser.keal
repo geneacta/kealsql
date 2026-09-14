@@ -191,6 +191,11 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                 tab.uniques.add(this.uniqueConstraint())
             } else if (this.atWord("index") and this.peekAt(1).kind == "(") {
                 tab.indexes.add(this.columnList("index"))
+            } else if ((this.atWord("noOverlap") or this.atWord("contiguous")) and this.peekAt(1).kind == "(") {
+                val t = this.peek()
+                val cols = this.columnList(t.text)
+                if (cols.size < 2) { this.fail(t.line, t.col, "`${t.text}(...)` names the key columns and, last, the range: `${t.text}(room, stay)`") }
+                tab.rules.add(RuleN(t.text, cols, t.line, t.col))
             } else if (this.atWord("check") and this.peekAt(1).kind == "ident" and this.peekAt(2).kind == "(") {
                 val t = this.advance()
                 val name = this.advance().text
@@ -410,10 +415,10 @@ package class Parser(val toks: List<Token>, val file: String, val source: String
                     ty.refColumn = this.expectIdent("a column name")
                     this.expect(">", "to close `Ref<`")
                 }
-                "List" -> {
-                    this.expect("<", "after `List`")
+                "List", "Range" -> {
+                    this.expect("<", "after `${name}`")
                     ty.args.add(this.typeExpr())
-                    this.expect(">", "to close `List<`")
+                    this.expect(">", "to close `${name}<`")
                 }
                 "String" -> {
                     if (this.eat("(")) {
@@ -701,6 +706,7 @@ package func keywordAt(toks: List<Token>, i: Int): Bool {
         "insert", "update", "delete" -> i > 0 and prev.kind == "ident" and (prev.text == "before" or prev.text == "after")
         "primary", "slug", "indexed", "cascade", "restrict", "setNull" -> nextIdent
         "unique" -> nextIdent or next.kind == "("
+        "noOverlap", "contiguous" -> next.kind == "("
         "index", "renamed" -> next.kind == "("
         "check" -> nextIdent and next2.kind == "("
         "as" -> nextIdent and i > 0 and (prev.kind == "ident" or prev.kind == ")")

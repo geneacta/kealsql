@@ -361,6 +361,26 @@ column fails in SQL *at run time*, when the `DELETE` happens. In KealSql,
 it is the natural default — "the reference is optional and goes away" is
 what the `?` already says.
 
+### Ranges, and the rules over them
+
+A pair of columns that form an interval is one column: `stay: Range<Date>`
+is a `daterange`, `nights: Range<Int>` an `int8range`. `range(a, b)` is
+`[a, b)`, and `range(a, b, "[]")` says which bounds are included in
+PostgreSQL's own notation — a bracket includes, a parenthesis excludes —
+because that notation is the one the database prints back.
+
+Two rules over a key and a range: `noOverlap(room, stay)` is an exclusion
+constraint (`EXCLUDE USING gist`, with `btree_gist` for the equality on
+the key), refused at the statement. `contiguous(room, nights)` is that,
+plus continuity: sorted by their start, the ranges of one key must each
+end where the next begins — judged by a **deferred** constraint trigger
+at commit, so that a transaction may take a chain apart and put it back.
+And the chain closes itself: a range written without an end,
+`rangeFrom(x)`, is the new current one, and the one that was open is
+closed at `x` by a `BEFORE INSERT` trigger. That is the versioning
+pattern — a tariff, a price, an address valid from a date — without the
+application computing the previous row's end.
+
 ### Declarative schema, not sugared DDL
 
 The gain is not that `primary` is shorter than `PRIMARY KEY`. It is that the

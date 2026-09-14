@@ -30,6 +30,7 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
 
     func pgTypeOf(scalar: String, len: Int, scale: Int): String {
         if (scalar.endsWith("[]")) { return this.pgTypeOf(scalar.take(scalar.length - 2), len, scale) + "[]" }
+        if (rangeElem(scalar) != "") { return rangeType(rangeElem(scalar)) }
         return when (scalar) {
             "Int" -> "integer"
             "BigInt" -> "bigint"
@@ -191,11 +192,31 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
             val tr = program.triggers.find({ snakeName(it.name) == lt.name })
             if (tr == null) { this.add("DROP TRIGGER ${quoteIf(lt.name)} ON ${qual(this.schema(), lt.table)};") }
         }
+        // contiguity: a trigger and a function per rule, by name
+        val contNames: List<String> = []
+        for (name in this.compiler.schema.tableOrder) {
+            val t = this.compiler.schema.tables[name]!!
+            for (r in t.decl.rules) {
+                if (r.kind == "contiguous") { contNames.add(this.compiler.contiguousName(t, r)); contNames.add(this.compiler.contiguousName(t, r) + "_chain") }
+            }
+        }
+        for (lt in this.live.triggers) {
+            if (lt.function.startsWith("kealsql_contiguous_") and not contNames.contains(lt.name)) { this.add("DROP TRIGGER ${quoteIf(lt.name)} ON ${qual(this.schema(), lt.table)};") }
+        }
         val fnNames = program.stored.map({ snakeName(it.name) })
         for (lf in this.live.functions) {
             val isTrigger = lf.symbol.startsWith("kealsql_trg_")
-            val wanted = if (isTrigger) { trgNames.contains(lf.name.drop(12)) } else { fnNames.contains(lf.name) }
+            val isCont = lf.name.startsWith("kealsql_contiguous_")
+            val wanted = if (isCont) { contNames.contains(lf.name) } else if (isTrigger) { trgNames.contains(lf.name.drop(12)) } else { fnNames.contains(lf.name) }
             unless (wanted) { this.add("DROP FUNCTION ${qual(this.schema(), lf.name)}(${lf.args});") }
+        }
+        for (name in this.compiler.schema.tableOrder) {
+            val t = this.compiler.schema.tables[name]!!
+            for (r in t.decl.rules) {
+                if (r.kind != "contiguous") { continue }
+                val cn = this.compiler.contiguousName(t, r)
+                unless (this.live.triggers.any({ it.name == cn })) { this.add(this.compiler.contiguousDdl(t, r).trim()) }
+            }
         }
         for (s in program.stored) {
             val sn = snakeName(s.name)
@@ -322,9 +343,21 @@ package class Migration(val compiler: Compiler, val live: Live, val destructive:
         // before adding, so a changed rule is a drop and an add.
         val want = this.wanted(t)
         for (k in lt.constraints) {
-            if (k.kind == "c") { continue }
+            if (k.kind == "c" or k.kind == "x") { continue }
             unless (want.any({ this.sameConstraint(it, k) })) {
                 this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};")
+            }
+        }
+        // Exclusions (noOverlap): by name, like checks.
+        val exclNames = t.decl.rules.map({ this.compiler.excludeName(t, it) })
+        for (k in lt.constraints) {
+            if (k.kind == "x" and not exclNames.contains(k.name)) { this.add("ALTER TABLE ${tn} DROP CONSTRAINT ${k.name};") }
+        }
+        for (r in this.compiler.exclusions(t)) {
+            val name = this.compiler.excludeName(t, r)
+            unless (lt.constraints.any({ it.kind == "x" and it.name == name })) {
+                if (r.cols.size > 1) { this.add("CREATE EXTENSION IF NOT EXISTS btree_gist;") }
+                this.drop("ALTER TABLE ${tn} ADD ${this.compiler.excludeSql(t, r)};", "fails if two rows of `${lt.name}` already overlap")
             }
         }
         // Checks: by name. A changed expression under the same name is not

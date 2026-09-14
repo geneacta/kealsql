@@ -189,6 +189,91 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 if (table.column(n) == null) { this.fail(table.decl.line, table.decl.col, "`index(${ix.join(", ")})` names `${n}`, which `${table.name}` has no column of") }
             }
         }
+        for (r in table.decl.rules) {
+            var k = 0
+            for (n in r.cols) {
+                val c = table.column(n)
+                if (c == null) { this.fail(r.line, r.col, "`${r.kind}(${r.cols.join(", ")})` names `${n}`, which `${table.name}` has no column of") }
+                val last = k == r.cols.size - 1
+                if (last and rangeElem(c.scalar) == "") { this.fail(r.line, r.col, "the last column of `${r.kind}(...)` is the range; `${n}` is a `${this.renderTy(c.ty())}`") }
+                if (not last and rangeElem(c.scalar) != "") { this.fail(r.line, r.col, "`${n}` is a range; the key columns of `${r.kind}(...)` come first, the range last") }
+                if (c.optional) { this.fail(r.line, r.col, "`${n}` is optional; a column of `${r.kind}(...)` is not") }
+                k += 1
+            }
+        }
+    }
+
+    /// `noOverlap(k, r)`: an exclusion constraint — the ranges of one key never
+    /// overlap. Equality on a scalar in a GiST index needs btree_gist.
+    package func excludeName(t: Table, r: RuleN): String { "${snakeName(t.name)}_${r.cols.map({ snakeName(it) }).join("_")}_excl" }
+    package func excludeSql(t: Table, r: RuleN): String {
+        val parts: List<String> = []
+        var k = 0
+        for (n in r.cols) {
+            parts.add("${sqlName(n)} WITH ${if (k == r.cols.size - 1) { "&&" } else { "=" }}")
+            k += 1
+        }
+        return "CONSTRAINT ${this.excludeName(t, r)} EXCLUDE USING gist (${parts.join(", ")})"
+    }
+    /// The rules that carry an exclusion, one per set of columns: `noOverlap` and
+    /// `contiguous` on the same columns share it.
+    package func exclusions(t: Table): List<RuleN> {
+        val out: List<RuleN> = []
+        val names: List<String> = []
+        for (r in t.decl.rules) {
+            val n = this.excludeName(t, r)
+            unless (names.contains(n)) { names.add(n); out.add(r) }
+        }
+        return out
+    }
+
+    package func needsBtreeGist(): Bool {
+        for (name in this.schema.tableOrder) {
+            for (r in this.schema.tables[name]!!.decl.rules) { if (r.cols.size > 1) { return true } }
+        }
+        return false
+    }
+
+    /// `contiguous(k, r)`: no gap and no overlap between the ranges of one key —
+    /// sorted by their start, each must begin where the previous ended. Checked
+    /// by a deferred constraint trigger, so a transaction may rearrange a chain
+    /// before it is judged at commit.
+    package func contiguousName(t: Table, r: RuleN): String { "kealsql_contiguous_${snakeName(t.name)}_${r.cols.map({ snakeName(it) }).join("_")}" }
+    package func contiguousDdl(t: Table, r: RuleN): String {
+        val name = this.contiguousName(t, r)
+        val fn = qual(this.schema, name)
+        val tn = qualName(this.schema, t.name)
+        val keys = r.cols.take(r.cols.size - 1).map({ sqlName(it) })
+        val range = sqlName(r.cols.last() ?: "")
+        val rangeCol = t.column(r.cols.last() ?: "")!!
+        val rtype = rangeType(rangeElem(rangeCol.scalar))
+        val partition = if (keys.isEmpty()) { "1" } else { keys.map({ "t." + it }).join(", ") }
+        val sameKey = if (keys.isEmpty()) { "TRUE" } else { keys.map({ "${it} = NEW.${it}" }).join(" AND ") }
+        // The chain: a range written without an end — rangeFrom(x) — is the new
+        // current one; the range that was open until then is closed at x.
+        var out = "CREATE OR REPLACE FUNCTION ${fn}_chain() RETURNS trigger LANGUAGE plpgsql AS $" + "$-- kealsql_contiguous chain\n"
+        out += "BEGIN\n"
+        out += "    IF upper(NEW.${range}) IS NULL THEN\n"
+        out += "        UPDATE ${tn} SET ${range} = ${rtype}(lower(${range}), lower(NEW.${range}), '[)')\n"
+        out += "        WHERE ${sameKey} AND upper(${range}) IS NULL AND lower(${range}) < lower(NEW.${range});\n"
+        out += "    END IF;\n"
+        out += "    RETURN NEW;\nEND $" + "$;\n"
+        out += "CREATE OR REPLACE TRIGGER ${name}_chain BEFORE INSERT ON ${tn} FOR EACH ROW EXECUTE FUNCTION ${fn}_chain();\n"
+        // The judge, at commit: sorted by their start, each range ends where the next begins.
+        out += "CREATE OR REPLACE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $" + "$-- kealsql_contiguous\n"
+        out += "DECLARE broken bigint;\nBEGIN\n"
+        out += "    SELECT count(*) INTO broken FROM (\n"
+        out += "        SELECT upper(t.${range}) AS ends, lead(lower(t.${range})) OVER (PARTITION BY ${partition} ORDER BY lower(t.${range})) AS next_starts\n"
+        out += "        FROM ${tn} AS t\n"
+        out += "    ) AS chain WHERE next_starts IS NOT NULL AND (ends IS NULL OR next_starts <> ends);\n"
+        out += "    IF broken > 0 THEN RAISE EXCEPTION '${snakeName(t.name)}: ${r.cols.join(", ")} must be contiguous: a gap or an overlap between consecutive ranges' USING ERRCODE = 'integrity_constraint_violation'; END IF;\n"
+        out += "    RETURN NULL;\nEND $" + "$;\n"
+        // A constraint trigger cannot be replaced; it is created once, silently.
+        out += "DO $" + "$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = '${name}' AND tgrelid = '${tn}'::regclass) THEN\n"
+        out += "    CREATE CONSTRAINT TRIGGER ${name} AFTER INSERT OR UPDATE OR DELETE ON ${tn}\n"
+        out += "        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${fn}();\n"
+        out += "END IF; END $" + "$;\n"
+        return out
     }
 
     /// `CHECK` SQL for a check, with bare column names.
@@ -320,6 +405,12 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 "RefSlug" -> { col.scalar = "String"; col.refTable = c.ty.refTable }
                 "Ref" -> { col.refTable = c.ty.refTable; col.refColumn = c.ty.refColumn }
                 "tuple" -> { this.fail(c.line, c.col, "a column cannot be a `${c.ty.render()}`") }
+                "Range" -> {
+                    val elem = c.ty.args[0]
+                    if (rangeType(elem.name) == "") { this.fail(elem.line, elem.col, "a range is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz`, not `${elem.render()}`") }
+                    if (elem.optional) { this.fail(elem.line, elem.col, "the bounds of a range are not optional; the column may be") }
+                    col.scalar = "Range<${elem.name}>"
+                }
                 "List" -> {
                     // An array column: `List<Int>` is `integer[]`. One level; the element is a scalar or an enum.
                     val elem = c.ty.args[0]
@@ -446,6 +537,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     package func ddl(): String {
         var out = ""
         if (this.schema.name != "") { out += "CREATE SCHEMA IF NOT EXISTS ${quoteIf(snakeName(this.schema.name))};\n\n" }
+        if (this.needsBtreeGist()) { out += "CREATE EXTENSION IF NOT EXISTS btree_gist;\n\n" }
         for (e in this.program.enums) {
             out += "CREATE TYPE ${qualName(this.schema, e.name)} AS ENUM (${e.values.map({ "'" + it + "'" }).join(", ")});\n\n"
         }
@@ -456,8 +548,10 @@ package class Compiler(package val file: String, package val program: ProgramN) 
             for (c in t.columns) { lines.add("    " + this.columnDdl(c)) }
             for (u in t.decl.uniques) { lines.add("    UNIQUE (${u.map({ sqlName(it) }).join(", ")})") }
             for (ch in t.decl.checks) { lines.add("    CONSTRAINT ${snakeName(t.name)}_${snakeName(ch.name)}_check CHECK (${this.checkSql(t, ch)})") }
+            for (r in this.exclusions(t)) { lines.add("    " + this.excludeSql(t, r)) }
             out += lines.join(",\n") + "\n);\n"
             for (ix in this.indexesOf(t)) { out += this.indexDdl(t, ix) + "\n" }
+            for (r in t.decl.rules) { if (r.kind == "contiguous") { out += this.contiguousDdl(t, r) } }
             out += "\n"
         }
         for (name in this.schema.viewOrder) { out += this.viewDdl(this.schema.tables[name]!!) + "\n" }
@@ -498,6 +592,11 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 val elem = t.args[0]
                 unless (isScalarName(elem.name) or this.schema.isEnum(elem.name)) { this.fail(elem.line, elem.col, "an array holds scalars or an enum, not `${elem.render()}`") }
                 elem.name + "[]"
+            }
+            "Range" -> {
+                val elem = t.args[0]
+                if (rangeType(elem.name) == "") { this.fail(elem.line, elem.col, "a range is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz`, not `${elem.render()}`") }
+                "Range<${elem.name}>"
             }
             "RefId" -> { this.checkRefParam(t); "Int" }
             "RefSlug" -> { this.checkRefParam(t); "String" }
@@ -1493,6 +1592,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 return Val("${recv.sql} ${e.text.toUpper()} ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
             }
             "lower", "upper", "trim" -> {
+                if (rangeElem(recv.ty.name) != "" and e.text != "trim") { return this.rangeMethod(e, recv, args, opt) }
                 this.needs(e, recv, "String")
                 this.argCount(e, 0)
                 return Val("${e.text}(${recv.sql})", recv.ty)
@@ -1584,6 +1684,13 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                 this.needs(e, recv, "String")
                 return Val("convert_to(${recv.sql}, 'UTF8')", Ty("Bytea", recv.ty.optional))
             }
+            "contains", "overlaps", "isEmpty" -> {
+                if (rangeElem(recv.ty.name) == "") {
+                    if (e.text == "contains") { return this.stringOrJsonContains(e, recv, args, opt) }
+                    this.fail(e.line, e.col, "`${e.text}` is asked of a `Range`, not a `${this.renderTy(recv.ty)}`")
+                }
+                return this.rangeMethod(e, recv, args, opt)
+            }
             "get", "at", "text", "hasKey" -> {
                 val isJson = recv.ty.name == "Json" or recv.ty.name == "Jsonb"
                 unless (isJson) { this.fail(e.line, e.col, "`${e.text}` is asked of a `Json` or `Jsonb`, not a `${this.renderTy(recv.ty)}`") }
@@ -1599,11 +1706,7 @@ package class Compiler(package val file: String, package val program: ProgramN) 
                     }
                 }
             }
-            "startsWith", "endsWith", "contains" -> {
-                if (recv.ty.name == "Jsonb" and e.text == "contains") {
-                    this.argCount(e, 1); this.needs(e, args[0], "Jsonb")
-                    return Val("${recv.sql} @> ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
-                }
+            "startsWith", "endsWith" -> {
                 this.needs(e, recv, "String")
                 this.argCount(e, 1)
                 this.needs(e, args[0], "String")
@@ -1680,6 +1783,40 @@ package class Compiler(package val file: String, package val program: ProgramN) 
         return Val("${head.sql} OVER (${spec})", head.ty)
     }
 
+    /// `contains`, `overlaps`, `lower`, `upper`, `isEmpty` on a `Range<T>`.
+    func rangeMethod(e: Ex, recv: Val, args: List<Val>, opt: Bool): Val {
+        val elem = rangeElem(recv.ty.name)
+        when (e.text) {
+                    "contains" -> {
+                        this.argCount(e, 1)
+                        val other = args[0]
+                        if (other.ty.name != recv.ty.name and not this.sameType(other.ty, Ty(elem, false))) { this.fail(e.line, e.col, "`contains` on a `${this.renderTy(recv.ty)}` takes a `${elem}` or a `${this.renderTy(recv.ty)}`") }
+                        // A point in a Range<Int> is a bigint: an integer parameter is cast, the operator does not.
+                        val point = if (other.ty.name != recv.ty.name and elem == "Int") { "(${other.sql})::bigint" } else { other.sql }
+                        return Val("${recv.sql} @> ${point}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+                    }
+                    "overlaps" -> {
+                        this.argCount(e, 1)
+                        unless (args[0].ty.name == recv.ty.name) { this.fail(e.line, e.col, "`overlaps` takes a `${this.renderTy(recv.ty)}`") }
+                        return Val("${recv.sql} && ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+                    }
+                    "lower", "upper" -> { this.argCount(e, 0); return Val("${e.text}(${recv.sql})", Ty(elem, true)) }
+                    else -> { this.argCount(e, 0); return Val("isempty(${recv.sql})", Ty("Bool", recv.ty.optional)) }
+        }
+        return this.lit("", "")
+    }
+
+    /// `contains` on a `String` (a substring) or a `Jsonb` (containment).
+    func stringOrJsonContains(e: Ex, recv: Val, args: List<Val>, opt: Bool): Val {
+        this.argCount(e, 1)
+        if (recv.ty.name == "Jsonb") {
+            this.needs(e, args[0], "Jsonb")
+            return Val("${recv.sql} @> ${args[0].sql}", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+        }
+        this.needs(e, recv, "String"); this.needs(e, args[0], "String")
+        return Val("${recv.sql} LIKE '%' || ${args[0].sql} || '%'", Ty(if (opt) { "Bool3" } else { "Bool" }, false))
+    }
+
     proc needs(e: Ex, v: Val, ty: String) {
         if (v.ty.name != ty) { this.fail(e.line, e.col, "`${e.text}` needs a `${ty}`, not `${this.renderTy(v.ty)}`") }
     }
@@ -1692,6 +1829,33 @@ package class Compiler(package val file: String, package val program: ProgramN) 
     func call(e: Ex, var plan: Plan): Val {
         when (e.text) {
             "now" -> { this.argCount(e, 0); return this.lit("now()", "Timestamptz") }
+            "range" -> {
+                // `range(a, b)`: the half-open range [a, b). `range(a, b, "[]")` says which
+                // bounds are included, in PostgreSQL's own notation: `[)`, `[]`, `(]`, `()`.
+                if (e.args.size != 2 and e.args.size != 3) { this.fail(e.line, e.col, "`range` takes two bounds, and `\"[]\"`, `\"(]\"`, `\"()\"` or `\"[)\"` to say which are included") }
+                val a = this.emit(e.args[0].value, plan)
+                val b = this.emit(e.args[1].value, plan)
+                unless (this.sameType(a.ty, b.ty)) { this.fail(e.line, e.col, "the bounds of a range have one type; `${this.renderTy(a.ty)}` and `${this.renderTy(b.ty)}`") }
+                if (a.isNull or b.isNull) { this.fail(e.line, e.col, "an unbounded range is written `rangeFrom(a)` or `rangeTo(b)`") }
+                val elem = if (a.ty.name == "BigInt") { "Int" } else { a.ty.name }
+                if (rangeType(elem) == "") { this.fail(e.line, e.col, "a range is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz`, not `${elem}`") }
+                var bounds = ""
+                if (e.args.size == 3) {
+                    val v = e.args[2].value
+                    val ok = v.kind == "str" and (v.text == "[)" or v.text == "[]" or v.text == "(]" or v.text == "()")
+                    unless (ok) { this.fail(v.line, v.col, "the bounds are one of `\"[)\"`, `\"[]\"`, `\"(]\"`, `\"()\"` — a bracket includes, a parenthesis excludes") }
+                    if (v.text != "[)") { bounds = ", '${v.text}'" }
+                }
+                return Val("${rangeType(elem)}(${a.sql}, ${b.sql}${bounds})", Ty("Range<${elem}>", a.ty.optional or b.ty.optional))
+            }
+            "rangeFrom", "rangeTo" -> {
+                this.argCount(e, 1)
+                val a = this.emit(e.args[0].value, plan)
+                val elem = if (a.ty.name == "BigInt") { "Int" } else { a.ty.name }
+                if (rangeType(elem) == "") { this.fail(e.line, e.col, "a range is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz`, not `${elem}`") }
+                val sql = if (e.text == "rangeFrom") { "${rangeType(elem)}(${a.sql}, NULL)" } else { "${rangeType(elem)}(NULL, ${a.sql})" }
+                return Val(sql, Ty("Range<${elem}>", a.ty.optional))
+            }
             "bytes" -> {
                 // `bytes("cafe")`: a Bytea literal, from hex.
                 this.argCount(e, 1)

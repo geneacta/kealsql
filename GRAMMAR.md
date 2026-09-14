@@ -73,7 +73,9 @@ Renamed       = "renamed" "(" Ident ")" ;                 (* the previous name, 
 Modifier      = "primary" | "slug" | "unique" | "indexed" | "cascade" | "restrict" | "setNull" ;
 TableRule     = "unique" "(" Ident ( "," Ident )+ ")"
               | "index" "(" Ident ( "," Ident )* ")"
-              | "check" Ident "(" Expr ")" ;              (* named; the expression is over the table's columns *)
+              | "check" Ident "(" Expr ")"                (* named; the expression is over the table's columns *)
+              | "noOverlap" "(" Ident ( "," Ident )* ")"  (* key columns, then the range: the ranges of one key never overlap *)
+              | "contiguous" "(" Ident ( "," Ident )* ")" ; (* the same, and no gap: a chain, judged at commit *)
 
 Type          = ( ScalarType | RefType ) "?"? ;
 ScalarType    = "Id" | "Slug" | "Serial" | "BigSerial"
@@ -83,6 +85,7 @@ ScalarType    = "Id" | "Slug" | "Serial" | "BigSerial"
               | "Uuid" | "Bytea" | "Date" | "Time" | "Timestamp" | "Timestamptz"
               | "Interval" | "Json" | "Jsonb" | "Inet"
               | "List" "<" ScalarType ">"                  (* an array column: integer[] *)
+              | "Range" "<" ScalarType ">"                 (* a range column: daterange, int8range, … *)
               | Ident ;                                   (* an enum *)
 RefType       = "RefId"   "<" Ident ">"
               | "RefSlug" "<" Ident ">"
@@ -115,6 +118,8 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | at most one of `cascade` / `restrict` / `setNull` | two |
 | `unique(a, b)` names existing columns of the table, at least two | otherwise |
 | `renamed(old)` at most once per column or table | twice |
+| `Range<T>` is over `Int`, `Decimal`, `Date`, `Timestamp` or `Timestamptz` | another `T` |
+| the last column of `noOverlap` / `contiguous` is a `Range`, the others are not, none is optional | otherwise |
 
 ### What it compiles to
 
@@ -138,6 +143,9 @@ have. It is its own production; the parser does not special-case `Ref<`.
 | `tags: List<String>` | `tags text[] NOT NULL` |
 | `indexed stock: Int` / `index(a, b)` | `CREATE INDEX item_stock_idx ON item (stock)` / `item_a_b_idx` |
 | `check inStock(stock >= 0)` | `CONSTRAINT item_in_stock_check CHECK (stock >= 0)` |
+| `stay: Range<Date>` | `stay daterange NOT NULL` |
+| `noOverlap(room, stay)` | `CONSTRAINT booking_room_stay_excl EXCLUDE USING gist (room WITH =, stay WITH &&)`, with `btree_gist` |
+| `contiguous(room, nights)` | the exclusion above, plus a deferred constraint trigger that refuses a gap between the ranges of one key at commit, and a `BEFORE INSERT` trigger that closes the open range (`rangeFrom(x)`) where the next one starts |
 | `Ref<T.c>` column | the type of `c`; `REFERENCES t(c)` |
 
 **Naming.** Identifiers are emitted in `snake_case`, unquoted: `fullName` →
@@ -389,6 +397,8 @@ left join, and the type of the result says which happened.
 | `s.like(p)`, `s.ilike(p)` | `Bool` / `Bool3` (`LIKE` / `ILIKE`) |
 | `s.lower()`, `s.upper()`, `s.length()`, `s.trim()` | `String` / `Int`, `?`-preserving |
 | `["a", "b"]` | `String[]` (`ARRAY['a', 'b']`); an empty `[]` takes the type of the column or parameter it is given to |
+| `range(a, b)`, `range(a, b, "[]")`, `rangeFrom(a)`, `rangeTo(b)` | a `Range<T>` — `[a, b)` unless the bounds say otherwise, in PostgreSQL's notation: a bracket includes, a parenthesis excludes; `rangeFrom` / `rangeTo` are unbounded on one side |
+| `r.contains(x)`, `r.contains(r2)`, `r.overlaps(r2)`, `r.lower()`, `r.upper()`, `r.isEmpty()` | `@>`, `&&`, `lower`, `upper` (`T?`: unbounded is null), `isempty` |
 | `xs.size`, `xs.has(v)` on an array | `Int` (`cardinality`), `Bool` / `Bool3` (`v = ANY(xs)`) |
 | `now()`, `today()`, `uuid()` | `Timestamptz`, `Date`, `Uuid` |
 | `+ - * / %` with a `Decimal` | `Decimal` |

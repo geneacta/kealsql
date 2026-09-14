@@ -1,0 +1,60 @@
+// Ranges, and the two rules over them: no overlap, and continuity.
+
+table Room {
+    id:   Id
+    name: Slug
+}
+
+// A room is booked for a half-open range of days; two bookings of one room
+// never overlap.
+table Booking {
+    id:    Id
+    cascade room: RefId<Room>
+    guest: String
+    stay:  Range<Date>
+    noOverlap(room, stay)
+}
+
+// A tariff applies to a range of nights; the tariffs of one room form a
+// chain without gap or overlap, judged when the transaction commits.
+table Tariff {
+    id:    Id
+    cascade room: RefId<Room>
+    nights: Range<Int>
+    cents:  Int
+    contiguous(room, nights)
+}
+
+func bookedOn(day: Date): List<(String, String)> {
+    from(Booking as b).where(b.stay.contains(day)).orderBy(b.room.name, b.guest).select(b.room.name, b.guest)
+}
+
+func clashes(room: Int, from: Date, to: Date): List<String> {
+    from(Booking).where(Booking.room == room and stay.overlaps(range(from, to))).orderBy(guest).select(guest)
+}
+
+func bounds(): List<(String, Date?, Date?)> {
+    from(Booking).orderBy(guest).select(guest, stay.lower(), stay.upper())
+}
+
+func tariffFor(room: Int, night: Int): Int? {
+    from(Tariff).where(Tariff.room == room and nights.contains(night)).select(cents).first()
+}
+
+proc book(room: Int, guest: String, from: Date, to: Date) {
+    insert(Booking(room = room, guest = guest, stay = range(from, to)))
+}
+
+proc price(room: Int, upTo: Int, fromNight: Int, cents: Int) {
+    insert(Tariff(room = room, nights = range(fromNight, upTo), cents = cents))
+}
+
+// A tariff with no end is the current one; the one that was current is closed where it starts.
+proc open(room: Int, fromNight: Int, cents: Int) {
+    insert(Tariff(room = room, nights = rangeFrom(fromNight), cents = cents))
+}
+
+// Bounds written in PostgreSQL's own notation: a bracket includes, a parenthesis excludes.
+func inclusive(room: Int, from: Date, to: Date): List<String> {
+    from(Booking).where(Booking.room == room and stay.overlaps(range(from, to, "[]"))).orderBy(guest).select(guest)
+}

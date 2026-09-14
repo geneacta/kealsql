@@ -1,0 +1,7 @@
+table Room { id: Id
+    name: Slug }
+table Booking {
+    id:   Id
+    cascade room: RefId<Room>
+    stay: Range<Date>
+}

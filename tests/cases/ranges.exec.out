@@ -1,0 +1,51 @@
+name|guest
+blue|ada
+red|cy
+(2 rows)
+guest
+ada
+bob
+(2 rows)
+guest|lower|upper
+ada|2026-03-01|2026-03-05
+bob|2026-03-05|2026-03-08
+cy|2026-03-02|2026-03-04
+(3 rows)
+psql:tests/cases/ranges.exec.sql:11: ERROR:  conflicting key value violates exclusion constraint "booking_room_stay_excl"
+cents
+9000
+(1 row)
+cents
+7000
+(1 row)
+cents
+(0 rows)
+psql:tests/cases/ranges.exec.sql:24: ERROR:  tariff: room, nights must be contiguous: a gap or an overlap between consecutive ranges
+psql:tests/cases/ranges.exec.sql:26: ERROR:  conflicting key value violates exclusion constraint "tariff_room_nights_excl"
+tariffs
+2
+(1 row)
+cents
+5000
+(1 row)
+cents
+4000
+(1 row)
+nights|cents
+[1,7)|9000
+[7,30)|7000
+[30,45)|5000
+[45,)|4000
+(4 rows)
+guest
+(0 rows)
+guest
+bob
+(1 row)
+tariffs
+5
+(1 row)
+psql:tests/cases/ranges.exec.sql:49: ERROR:  tariff: room, nights must be contiguous: a gap or an overlap between consecutive ranges
+tariffs
+5
+(1 row)

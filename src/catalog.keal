@@ -67,9 +67,9 @@ SELECT 'K', c.relname, k.contype, k.conname,
        coalesce((SELECT string_agg(a.attname, ',' ORDER BY x.ord) FROM unnest(k.confkey) WITH ORDINALITY x(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = x.attnum), ''),
        k.confdeltype, k.confupdtype,
-       CASE WHEN k.contype = 'c' THEN pg_get_constraintdef(k.oid) ELSE '' END
+       CASE WHEN k.contype IN ('c', 'x') THEN pg_get_constraintdef(k.oid) ELSE '' END
 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid LEFT JOIN pg_class r ON r.oid = k.confrelid
-WHERE k.contype IN ('p', 'u', 'f', 'c') AND c.relnamespace = 'NS'::regnamespace
+WHERE k.contype IN ('p', 'u', 'f', 'c', 'x') AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname, k.conname;
 SELECT 'V', c.relname, coalesce(obj_description(c.oid, 'pg_class'), ''), c.relkind
 FROM pg_class c
@@ -77,7 +77,7 @@ WHERE c.relkind IN ('v', 'm') AND c.relnamespace = 'NS'::regnamespace
 ORDER BY c.relname;
 SELECT 'F', p.proname, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), coalesce(p.probin, ''), p.prosrc
 FROM pg_proc p
-WHERE p.pronamespace = 'NS'::regnamespace AND p.prosrc LIKE 'kealsql\_%'
+WHERE p.pronamespace = 'NS'::regnamespace AND (p.prosrc LIKE 'kealsql\_%' OR p.prosrc LIKE '-- kealsql\_%')
 ORDER BY p.proname;
 SELECT 'G', t.tgname, c.relname,
        CASE WHEN (t.tgtype & 2) = 2 THEN 'before' ELSE 'after' END,
@@ -90,7 +90,7 @@ SELECT 'I', c.relname, i.relname,
        (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
           JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
 FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_class i ON i.oid = x.indexrelid
-WHERE c.relnamespace = 'NS'::regnamespace AND NOT x.indisprimary AND NOT x.indisunique
+WHERE c.relnamespace = 'NS'::regnamespace AND NOT x.indisprimary AND NOT x.indisunique AND NOT x.indisexclusion
 ORDER BY c.relname, i.relname;
 """.replace("NS", ns)
 }
