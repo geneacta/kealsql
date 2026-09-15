@@ -99,6 +99,10 @@ func publish(post: Int): Post {
 
 proc forget(user: RefId&lt;User&gt;) {
     delete(Post).where(author == user)
+}
+
+proc retitle(post: Int, to: String) {
+    update(Post).where(id == post).set(title = to)
 }</pre></div>
 <p class="lede">Trois choses à voir. <code>Id</code> est une clé primaire serial et <code>Slug</code> un texte unique non nul — les deux clés d'une table, chacune une fois. <code>RefId&lt;User&gt;</code> est une référence, et <code>RefId&lt;User&gt;?</code> une référence optionnelle, ce qui dit ce qui se passe à la suppression (<code>SET NULL</code>) et comment un chemin à travers elle se lit (<code>?.</code>, une jointure gauche). Et une requête commence à <code>from</code> et finit à <code>select</code> : l'ordre d'évaluation, pour qu'au <code>select</code> le checker connaisse déjà chaque colonne.</p>
 </section>
@@ -204,7 +208,53 @@ try {
 }
 db.forget(2)
 println(&quot;posts left: ${db.drafts() + db.byAuthor(&quot;ada&quot;).size}&quot;)
-db.close()</pre><div class="cwin-out"><pre>made: 0 draft(s) in a new database
+db.close()
+
+// ---- transactions as blocks: the block&#x27;s value is the transaction&#x27;s
+val tx = connectBlog(&quot;&quot;)
+val before = tx.drafts()
+val kept = tx.transaction({ t -&gt;
+    t.publish(2)
+    t.drafts()
+})
+println(&quot;transaction: drafts ${before} -&gt; ${kept}, committed ${tx.drafts()}&quot;)
+try {
+    tx.transaction({ t -&gt;
+        t.forget(1)
+        t.publish(999)                                  // throws: the block is rolled back
+    })
+} catch (e: String) {
+    println(&quot;rolled back: ${e}&quot;)
+}
+println(&quot;ada still has ${tx.byAuthor(&quot;ada&quot;).size} post(s)&quot;)
+// nested: the inner block is a savepoint, the outer block goes on and commits
+val titles = tx.transaction({ t -&gt;
+    t.retitle(1, &quot;Hello again&quot;)
+    try {
+        t.transaction({ u -&gt; u.forget(1); u.publish(999) })
+    } catch (e: String) {
+        println(&quot;inner undone: ${e}&quot;)
+    }
+    t.byAuthor(&quot;ada&quot;)
+})
+show(&quot;after nested&quot;, titles)
+
+// serializable, retried: a second connection commits a conflicting write
+// while the block runs, and the block runs again from the start.
+val other = connectBlog(&quot;&quot;)
+val reads: List&lt;Int&gt; = []
+val seen = tx.serializable({ t -&gt;
+    val n = t.byAuthor(&quot;ada&quot;).size                      // read
+    reads.add(n)
+    if (reads.size == 1) {
+        other.serializable({ o -&gt; o.forget(1); o.byAuthor(&quot;ada&quot;) })   // deletes what t read, and commits first
+    }
+    t.retitle(2, &quot;Draft two&quot;)                           // write: refused as a serialization failure the first time
+    n
+})
+println(&quot;serializable: ${reads.size} attempt(s), read ${reads.map({ n -&gt; &quot;${n}&quot; }).join(&quot; then &quot;)}, answered ${seen}&quot;)
+other.close()
+tx.close()</pre><div class="cwin-out"><pre>made: 0 draft(s) in a new database
 again: 0 draft(s)
 ada before: 1 post(s)
   #1 Hello
@@ -219,7 +269,15 @@ editor of #1: bob
 editor of #2: none
 drafts after rollback: 1
 caught: publish: expected one row, got 0
-posts left: 2</pre></div></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal build src/main.keal -o kealsql        # once: the compiler the import runs
+posts left: 2
+transaction: drafts 1 -&gt; 0, committed 0
+rolled back: publish: expected one row, got 0
+ada still has 2 post(s)
+inner undone: publish: expected one row, got 0
+after nested: 2 post(s)
+  #2 Draft one
+  #1 Hello again
+serializable: 2 attempt(s), read 2 then 0, answered 0</pre></div></div><div class="cwin"><div class="cwin-bar"><span class="f">shell</span></div><pre>keal build src/main.keal -o kealsql        # once: the compiler the import runs
 export KEALSQL=$PWD/kealsql
 keal build app.keal -I$(pg_config --includedir) -lpq -o app
 PGDATABASE=blog ./app</pre></div>

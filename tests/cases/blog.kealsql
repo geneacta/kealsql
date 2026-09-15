@@ -42,3 +42,7 @@ func publish(post: Int): Post {
 proc forget(user: RefId<User>) {
     delete(Post).where(author == user)
 }
+
+proc retitle(post: Int, to: String) {
+    update(Post).where(id == post).set(title = to)
+}

@@ -49,3 +49,9 @@ RETURNING *;
 PREPARE forget(integer) AS
 DELETE FROM post
 WHERE post.author = $1;
+
+-- proc retitle(post: Int, to: String)
+PREPARE retitle(integer, text) AS
+UPDATE post
+SET title = $2
+WHERE post.id = $1;

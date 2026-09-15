@@ -156,6 +156,10 @@ func publish(post: Int): Post {
 
 proc forget(user: RefId&lt;User&gt;) {
     delete(Post).where(author == user)
+}
+
+proc retitle(post: Int, to: String) {
+    update(Post).where(id == post).set(title = to)
 }</pre></div>
 <p class="lede"><code>enum Status</code> devient un type enum PostgreSQL. <code>table User { … }</code> devient une table : <code>id: Id</code> est une clé primaire serial, <code>name: Slug</code> un texte unique — chaque table a un primary et au plus un slug. <code>String?</code> est une colonne qui peut être nulle ; <code>String</code> ne peut pas.</p>
 <p class="lede"><code>cascade author: RefId&lt;User&gt;</code> est une clé étrangère vers le primary de <code>User</code>, supprimée avec l'utilisateur ; <code>editor: RefId&lt;User&gt;?</code> en est une optionnelle, mise à null quand l'utilisateur disparaît.</p>

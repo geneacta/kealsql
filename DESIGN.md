@@ -517,6 +517,17 @@ output more than a `psql` convenience: the application never writes SQL,
 and a column the schema does not have is a compile error in the
 application too, because the record it reads is generated from the schema.
 
+A transaction is a block: `db.transaction({ t -> … })` runs the block
+between `BEGIN` and `COMMIT`, answers what the block answers, and rolls
+back — the error thrown on — when the block throws. Nested, a block is a
+savepoint: the inner failure undoes the inner work only, and the outer
+block goes on. `db.serializable({ t -> … })` is the same at the
+`SERIALIZABLE` level and runs the whole block again when the server
+refuses it as a serialization failure (SQLSTATE 40001, a
+`SerializationFailure` in the module) — which is how that level is meant
+to be used, and the retry loop nobody writes right by hand. `begin()` /
+`commit()` / `rollback()` stay for the cases a block does not fit.
+
 ### The escape hatch
 
 No language covers the long tail of PostgreSQL, and one that tried would

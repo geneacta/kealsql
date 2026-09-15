@@ -109,6 +109,10 @@ import "./blog.kealsql"
 val db = createBlog("", "blog")          // the database and its schema, made if missing
 for (p in db.byAuthor("ada")) { println("#${p.id} ${p.title}") }
 val editor = db.editorOf(1)              // String?
+val left = db.transaction({ t ->         // BEGIN … COMMIT, ROLLBACK if the block throws
+    t.publish(2)
+    t.drafts()
+})
 db.close()
 ```
 

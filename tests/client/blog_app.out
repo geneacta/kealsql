@@ -14,3 +14,11 @@ editor of #2: none
 drafts after rollback: 1
 caught: publish: expected one row, got 0
 posts left: 2
+transaction: drafts 1 -> 0, committed 0
+rolled back: publish: expected one row, got 0
+ada still has 2 post(s)
+inner undone: publish: expected one row, got 0
+after nested: 2 post(s)
+  #2 Draft one
+  #1 Hello again
+serializable: 2 attempt(s), read 2 then 0, answered 0

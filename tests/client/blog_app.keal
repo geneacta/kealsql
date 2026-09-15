@@ -42,3 +42,49 @@ try {
 db.forget(2)
 println("posts left: ${db.drafts() + db.byAuthor("ada").size}")
 db.close()
+
+// ---- transactions as blocks: the block's value is the transaction's
+val tx = connectBlog("")
+val before = tx.drafts()
+val kept = tx.transaction({ t ->
+    t.publish(2)
+    t.drafts()
+})
+println("transaction: drafts ${before} -> ${kept}, committed ${tx.drafts()}")
+try {
+    tx.transaction({ t ->
+        t.forget(1)
+        t.publish(999)                                  // throws: the block is rolled back
+    })
+} catch (e: String) {
+    println("rolled back: ${e}")
+}
+println("ada still has ${tx.byAuthor("ada").size} post(s)")
+// nested: the inner block is a savepoint, the outer block goes on and commits
+val titles = tx.transaction({ t ->
+    t.retitle(1, "Hello again")
+    try {
+        t.transaction({ u -> u.forget(1); u.publish(999) })
+    } catch (e: String) {
+        println("inner undone: ${e}")
+    }
+    t.byAuthor("ada")
+})
+show("after nested", titles)
+
+// serializable, retried: a second connection commits a conflicting write
+// while the block runs, and the block runs again from the start.
+val other = connectBlog("")
+val reads: List<Int> = []
+val seen = tx.serializable({ t ->
+    val n = t.byAuthor("ada").size                      // read
+    reads.add(n)
+    if (reads.size == 1) {
+        other.serializable({ o -> o.forget(1); o.byAuthor("ada") })   // deletes what t read, and commits first
+    }
+    t.retitle(2, "Draft two")                           // write: refused as a serialization failure the first time
+    n
+})
+println("serializable: ${reads.size} attempt(s), read ${reads.map({ n -> "${n}" }).join(" then ")}, answered ${seen}")
+other.close()
+tx.close()

@@ -70,6 +70,7 @@ package func clientSource(compiler: Compiler): String {
     out += "extern proc kcExec(handle: Int, sql: borrow String) = \"kealsql_client_exec\"\n"
     out += "extern func kcFailed(): Bool = \"kealsql_client_failed\"\n"
     out += "extern func kcMessage(): own String = \"kealsql_client_message\"\n"
+    out += "extern func kcState(): own String = \"kealsql_client_state\"\n"
     out += "extern func kcRows(): Int = \"kealsql_client_rows\"\n"
     out += "extern func kcIsNull(row: Int, col: Int): Bool = \"kealsql_client_is_null\"\n"
     out += "extern func kcStr(row: Int, col: Int): own String = \"kealsql_client_str\"\n"
@@ -77,7 +78,14 @@ package func clientSource(compiler: Compiler): String {
     out += "extern func kcFloat(row: Int, col: Int): Float = \"kealsql_client_float\"\n"
     out += "extern func kcBool(row: Int, col: Int): Bool = \"kealsql_client_bool\"\n\n"
     out += "/// A query that failed is a Keal exception: the query's name, and what the server said.\n"
-    out += "proc kcCheck(what: String) { if (kcFailed()) { throw what + \": \" + kcMessage() } }\n\n"
+    out += "/// A serialization failure (SQLSTATE 40001) has its own type: `serializable { … }` retries on it.\n"
+    out += "public record SerializationFailure(val message: String)\n\n"
+    out += "proc kcCheck(what: String) {\n"
+    out += "    if (kcFailed()) {\n"
+    out += "        if (kcState() == \"40001\") { throw SerializationFailure(what + \": \" + kcMessage()) }\n"
+    out += "        throw what + \": \" + kcMessage()\n"
+    out += "    }\n"
+    out += "}\n\n"
 
     // ---- the connection, with one method per query
     out += "/// Opens a connection: a libpq connection string (\"dbname=blog host=...\", or \"\" for the PG* environment).\n"
@@ -113,10 +121,12 @@ package func clientSource(compiler: Compiler): String {
     out += "    return db\n"
     out += "}\n\n"
     out += "public class ${stem}Db(val handle: Int) {\n"
+    out += "    var depth: Int = 0\n"
     out += "    public proc close() { kcClose(this.handle) }\n"
     out += "    public proc begin() { kcExec(this.handle, \"BEGIN\"); kcCheck(\"begin\") }\n"
     out += "    public proc commit() { kcExec(this.handle, \"COMMIT\"); kcCheck(\"commit\") }\n"
     out += "    public proc rollback() { kcExec(this.handle, \"ROLLBACK\"); kcCheck(\"rollback\") }\n\n"
+    out += transactionMethods(stem)
     var slot = 0
     for (q in queries) {
         val w = queryWrapperOn("kc", "this.handle", q, slot, schema)
@@ -128,11 +138,87 @@ package func clientSource(compiler: Compiler): String {
         slot += 1
     }
     out += "}\n\n"
+    out += transactionRunner(stem)
 
     // ---- the C side
     out += "native \"\"\"\n"
     out += clientBridge(queries)
     out += "\"\"\"\n"
+    return out
+}
+
+/// `transaction { … }` and `serializable { … }`: a block run in a
+/// transaction, committed when it answers, rolled back when it throws.
+/// Nested, a block is a savepoint. Serializable blocks are retried when
+/// PostgreSQL refuses them as a serialization failure (SQLSTATE 40001).
+/// The block itself runs in `kcBlock`, a module-level function and not a
+/// method: Keal's native backend does not check the unwind flag after a
+/// method call, so a throw out of `this.run(…)` inside `serializable`'s
+/// `try` would skip its `catch` and end the program in silence.
+func transactionMethods(stem: String): String {
+    var out = ""
+    out += "    /// Runs `body` in a transaction: `BEGIN`, then `COMMIT` when it answers, `ROLLBACK` —\n"
+    out += "    /// and the error thrown on — when it throws. Inside a transaction it is a savepoint:\n"
+    out += "    /// an inner failure undoes the inner work only, and the outer block goes on.\n"
+    out += "    public func transaction<T>(body: (${stem}Db) -> T): T {\n"
+    out += "        return kcBlock(this, \"BEGIN\", body)\n"
+    out += "    }\n\n"
+    out += "    /// The same at the SERIALIZABLE level, retried — the whole block again — when the\n"
+    out += "    /// server refuses it as a serialization failure, which is how that level is used.\n"
+    out += "    /// Nested in a transaction it is a savepoint, and the level is the outer block's.\n"
+    out += "    public func serializable<T>(body: (${stem}Db) -> T): T {\n"
+    out += "        var tries = 0\n"
+    out += "        while (tries < 10) {\n"
+    out += "            tries += 1\n"
+    out += "            try {\n"
+    out += "                return kcBlock(this, \"BEGIN ISOLATION LEVEL SERIALIZABLE\", body)\n"
+    out += "            } catch (e: SerializationFailure) {\n"
+    out += "                if (this.depth > 0 or tries >= 10) { throw e }\n"
+    out += "            }\n"
+    out += "        }\n"
+    out += "        throw \"transaction: gave up after \" + tries + \" serialization failures\"\n"
+    out += "    }\n\n"
+    out += "    proc nest() { this.depth += 1 }\n"
+    out += "    proc unnest() { this.depth -= 1 }\n"
+    out += "    proc undo(ending: Bool, inner: Bool, point: String) {\n"
+    out += "        if (ending) { return }                     // the COMMIT / RELEASE path has settled already\n"
+    out += "        this.depth -= 1\n"
+    out += "        kcExec(this.handle, if (inner) { \"ROLLBACK TO SAVEPOINT \" + point } else { \"ROLLBACK\" })\n"
+    out += "    }\n\n"
+    return out
+}
+
+/// The block runner behind `transaction` and `serializable`, at module level: `kcBlock`.
+func transactionRunner(stem: String): String {
+    var out = ""
+    out += "/// A block in a transaction, or in a savepoint when one is open already.\n"
+    out += "func kcBlock<T>(db: ${stem}Db, begin: String, body: (${stem}Db) -> T): T {\n"
+    out += "    val inner = db.depth > 0\n"
+    out += "    val point = \"kealsql_\" + db.depth\n"
+    out += "    kcExec(db.handle, if (inner) { \"SAVEPOINT \" + point } else { begin })\n"
+    out += "    kcCheck(\"transaction\")\n"
+    out += "    db.nest()\n"
+    out += "    var ending = false\n"
+    out += "    try {\n"
+    out += "        val result = body(db)\n"
+    out += "        ending = true\n"
+    out += "        db.unnest()\n"
+    out += "        kcExec(db.handle, if (inner) { \"RELEASE SAVEPOINT \" + point } else { \"COMMIT\" })\n"
+    out += "        if (kcFailed()) {\n"
+    out += "            val message = kcMessage()\n"
+    out += "            val state = kcState()\n"
+    out += "            if (inner) { kcExec(db.handle, \"ROLLBACK TO SAVEPOINT \" + point) }   // a COMMIT that fails has rolled back already\n"
+    out += "            if (state == \"40001\") { throw SerializationFailure(\"transaction: \" + message) }\n"
+    out += "            throw \"transaction: \" + message\n"
+    out += "        }\n"
+    out += "        return result\n"
+    // Keal has no `finally`, and its catch-all binds the message, not the value:
+    // the two types the block itself throws are caught whole and rethrown whole,
+    // anything else undoes the work and goes on as its message.
+    out += "    } catch (e: SerializationFailure) { db.undo(ending, inner, point); throw e }\n"
+    out += "      catch (e: String) { db.undo(ending, inner, point); throw e }\n"
+    out += "      catch (e) { db.undo(ending, inner, point); throw e }\n"
+    out += "}\n\n"
     return out
 }
 
@@ -178,9 +264,15 @@ static int kc_argc;
 static PGresult* kc_res;
 static char* kc_err;
 
+static char kc_state[6] = "";          /* the SQLSTATE of the last error, "" when it had none */
+static void kc_set_state(PGresult* r) {
+    const char* st = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+    snprintf(kc_state, sizeof kc_state, "%s", st ? st : "");
+}
 static void kc_set_error(const char* m) {
     free(kc_err);
     kc_err = strdup(m ? m : "error");
+    kc_state[0] = 0;
     size_t n = strlen(kc_err);
     while (n > 0 && (kc_err[n - 1] == '\n' || kc_err[n - 1] == ' ')) { kc_err[--n] = 0; }
 }
@@ -227,12 +319,12 @@ void kealsql_client_run(int64_t h, int64_t slot) {
     snprintf(name, sizeof name, "kealsql_%d", (int)slot);
     if (!kc_prepared[h][slot]) {
         PGresult* p = PQprepare(c, name, kc_sql[slot], kc_nargs[slot], NULL);
-        if (!kc_ok(p)) { kc_set_error(PQresultErrorMessage(p)); PQclear(p); kc_reset_args(); return; }
+        if (!kc_ok(p)) { kc_set_error(PQresultErrorMessage(p)); kc_set_state(p); PQclear(p); kc_reset_args(); return; }
         PQclear(p);
         kc_prepared[h][slot] = true;
     }
     kc_res = PQexecPrepared(c, name, kc_argc, (const char* const*)kc_args, NULL, NULL, 0);
-    if (!kc_ok(kc_res)) { kc_set_error(PQresultErrorMessage(kc_res)); PQclear(kc_res); kc_res = NULL; }
+    if (!kc_ok(kc_res)) { kc_set_error(PQresultErrorMessage(kc_res)); kc_set_state(kc_res); PQclear(kc_res); kc_res = NULL; }
     kc_reset_args();
 }
 
@@ -241,11 +333,12 @@ void kealsql_client_exec(int64_t h, const char* sql) {
     free(kc_err); kc_err = NULL;
     if (h < 0 || h >= KC_MAXCONN || kc_conns[h] == NULL) { kc_set_error("no such connection"); return; }
     kc_res = PQexec(kc_conns[h], sql);
-    if (!kc_ok(kc_res)) { kc_set_error(PQresultErrorMessage(kc_res)); PQclear(kc_res); kc_res = NULL; }
+    if (!kc_ok(kc_res)) { kc_set_error(PQresultErrorMessage(kc_res)); kc_set_state(kc_res); PQclear(kc_res); kc_res = NULL; }
 }
 
 bool kealsql_client_failed(void) { return kc_err != NULL; }
 char* kealsql_client_message(void) { return strdup(kc_err ? kc_err : ""); }
+char* kealsql_client_state(void) { return strdup(kc_state); }
 int64_t kealsql_client_rows(void) {
     if (!kc_res) { return 0; }
     if (PQresultStatus(kc_res) == PGRES_TUPLES_OK) { return PQntuples(kc_res); }

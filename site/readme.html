@@ -102,6 +102,10 @@ tests/run.sh                                              # the suite: every cas
 val db = createBlog(&quot;&quot;, &quot;blog&quot;)          // the database and its schema, made if missing
 for (p in db.byAuthor(&quot;ada&quot;)) { println(&quot;#${p.id} ${p.title}&quot;) }
 val editor = db.editorOf(1)              // String?
+val left = db.transaction({ t -&gt;         // BEGIN … COMMIT, ROLLBACK if the block throws
+    t.publish(2)
+    t.drafts()
+})
 db.close()</code></pre>
 <p><code>connectBlog(conninfo)</code> opens an existing one. <code>keal build app.keal -I$(pg_config --includedir) -lpq</code> builds it; <code>kealsql</code> is <code>keal build src/main.keal -o kealsql</code> put on the path, or named by <code>KEALSQL</code>. Without the loader, <code>kealsql --client DIR blog.kealsql</code> writes the same module to import by its own path.</p>
 <p><code>--migrate</code> reads the database through <code>psql</code> (<code>--db</code> is its <code>-d</code>; the <code>PG*</code> environment and <code>~/.pgpass</code> work as for <code>psql</code>) and prints the statements that bring it to the file, to review. Destructive ones — drops, narrowed types, a new <code>NOT NULL</code> — are held back as comments, each with what it would cost, until <code>--destructive</code>. A rename is written where it happens, <code>renamed(bio) about: String?</code> or <code>renamed(Post) table Article</code>, because a diff cannot tell a rename from a drop and an add.</p>
