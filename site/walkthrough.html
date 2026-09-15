@@ -62,7 +62,7 @@ cd keal
 cargo build --release
 export PATH=&quot;$PWD/target/release:$PATH&quot;
 keal version
-cd ..</pre><div class="cwin-out"><pre>keal 1.2.0</pre></div></div>
+cd ..</pre><div class="cwin-out"><pre>keal 1.3.0</pre></div></div>
 <p class="lede">The <code>export PATH</code> line lasts for this terminal only; add it to your shell's startup file (<code>~/.bashrc</code>, <code>~/.zshrc</code>) to keep it. <code>cargo install --path .</code> inside <code>keal/</code> is the permanent alternative.</p>
 <p class="lede">KealSql needs Keal 1.3.0 or later — the release whose loader reads a <code>.kealsql</code> import.</p>
 </section>
@@ -76,8 +76,12 @@ brew install postgresql@17
 brew services start postgresql@17
 
 psql --version
-pg_config --includedir</pre><div class="cwin-out"><pre>psql (PostgreSQL) 17.x
-/usr/include/postgresql</pre></div></div>
+pg_config --includedir
+pg_isready</pre><div class="cwin-out"><pre>psql (PostgreSQL) 17.x
+/usr/include/postgresql
+/var/run/postgresql:5432 - accepting connections</pre></div></div>
+<p class="lede">PostgreSQL is a <em>server</em>: a program that runs in the background and holds any number of databases, each with its own tables. <code>psql</code> is the terminal that talks to it. On Debian and Ubuntu the package starts the server for you; <code>pg_isready</code> says whether it is up.</p>
+<p class="lede"><strong>If it does not:</strong> <em>no response</em> or <em>connection refused</em> means the server is not running — <code>sudo systemctl start postgresql</code> on Linux, <code>brew services start postgresql@17</code> on macOS.</p>
 <p class="lede">On Windows, the <a href="https://www.enterprisedb.com/downloads/postgres-postgresql-downloads">EDB installer</a> gives you <code>psql</code>, <code>createdb</code> and <code>pg_config</code>; add its <code>bin</code> directory to the path.</p>
 </section>
 <section class="band" id="give-yourself-a-database-user"><h2>4. Give yourself a database user</h2>
@@ -169,7 +173,7 @@ proc retitle(post: Int, to: String) {
 <p class="lede">The compiler turns the file into SQL: the tables as <code>CREATE</code> statements, then one prepared statement per query. Look at the file it wrote; it is plain SQL you could have typed.</p>
 <div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ You should see</span></div><pre>kealsql blog.kealsql &gt; blog.sql
 grep -c PREPARE blog.sql
-grep -A5 &#x27;func editorOf&#x27; blog.sql</pre><div class="cwin-out"><pre>5
+grep -A5 &#x27;func editorOf&#x27; blog.sql</pre><div class="cwin-out"><pre>6
 -- func editorOf(post: Int): String?
 PREPARE editor_of(integer) AS
 SELECT editor.name
@@ -179,31 +183,42 @@ WHERE post.id = $1</pre></div></div>
 <p class="lede"><strong>If it does not:</strong> an <code>error blog.kealsql:L:C …</code> line names the place and says what to write. The most common one for a first file is a column named in a query that the table does not have.</p>
 </section>
 <section class="band" id="create-the-database"><h2>9. Create the database</h2>
-<p class="lede"><code>createdb</code> makes an empty database named <code>blog</code>; loading the compiled file into it makes the tables. Then look at them.</p>
+<p class="lede">Your first database, in two commands. <code>createdb blog</code> asks the server for a new, empty database named <code>blog</code>. <code>psql -d blog -f blog.sql</code> opens it and runs the compiled file in it: the file's <code>CREATE</code> statements make the enum type and the two tables, and <code>psql</code> answers one line per statement. Then <code>\dt</code> lists the tables — <code>-c</code> runs one command and comes back to the shell.</p>
 <div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ You should see</span></div><pre>createdb blog
 psql -d blog -f blog.sql
-psql -d blog -c &#x27;\dt&#x27;</pre><div class="cwin-out"><pre>         List of tables
+psql -d blog -c &#x27;\dt&#x27;</pre><div class="cwin-out"><pre>CREATE TYPE
+CREATE TABLE
+CREATE TABLE
+PREPARE
+PREPARE
+PREPARE
+PREPARE
+PREPARE
+PREPARE
+         List of tables
  Schema | Name | Type  |  Owner
 --------+------+-------+--------
  public | post | table | you
  public | user | table | you
 (2 rows)</pre></div></div>
-<p class="lede">The <code>CREATE</code> statements are permanent. The <code>PREPARE</code> statements are not: they live for the <code>psql</code> session that ran them. That is why the next step loads them again, with <code>--queries</code>, in the session that uses them — and why a program (step 12) prepares its own.</p>
+<p class="lede"><strong>If it does not:</strong> <em>database "blog" already exists</em> — you ran it twice; <code>dropdb blog</code> throws it away, rows included, and you start over. <em>permission denied to create database</em> or <em>role … does not exist</em> — step 4. <em>connection to server … failed</em> — step 3, the server is not running.</p>
+<p class="lede">The <code>CREATE</code> statements are permanent. The <code>PREPARE</code> statements are not: they live for the <code>psql</code> session that ran them. That is why the next step loads them again, with <code>--queries</code>, in the session that uses them — and why a program (step 11) prepares its own.</p>
 </section>
 <section class="band" id="put-some-rows-in-and-query-them"><h2>10. Put some rows in, and query them</h2>
-<p class="lede">One <code>psql</code> session: load the queries — <code>--queries</code> prints the <code>PREPARE</code>s without the <code>CREATE</code>s, which would fail on tables that exist — insert two users and three posts, and call the queries by name. <code>EXECUTE</code> is how a prepared statement is called; the names are the file's, in <code>snake_case</code>.</p>
+<p class="lede">Now a <code>psql</code> session you stay in. The first line, in the shell, writes the queries alone to a file — <code>--queries</code> prints the <code>PREPARE</code>s without the <code>CREATE</code>s, which would fail on tables that exist. <code>psql -d blog</code> then opens the database and gives you its own prompt, <code>blog=&gt;</code>: what follows that prompt is typed inside <code>psql</code>, and each command ends with a semicolon. <code>\i</code> reads the file of queries into the session; the two <code>INSERT</code>s put two users and three posts in; <code>EXECUTE</code> calls a prepared statement by name — the file's names, in <code>snake_case</code>; the last <code>SELECT</code> shows the table as it is; <code>\q</code> leaves.</p>
 <div class="cwin"><div class="cwin-bar"><span class="f">shell</span><span class="run">▶ You should see</span></div><pre>kealsql --queries blog.kealsql &gt; queries.sql
 psql -d blog
 
 blog=&gt; \i queries.sql
 blog=&gt; INSERT INTO &quot;user&quot; (name, email) VALUES (&#x27;ada&#x27;, &#x27;ada@x&#x27;), (&#x27;bob&#x27;, &#x27;bob@x&#x27;);
 blog=&gt; INSERT INTO post (author, editor, title, status, created) VALUES
-         (1, 2, &#x27;Hello&#x27;, &#x27;Published&#x27;, now()),
-         (1, NULL, &#x27;Draft one&#x27;, &#x27;Draft&#x27;, now()),
-         (2, NULL, &#x27;Bob post&#x27;, &#x27;Published&#x27;, now());
+         (1, 2, &#x27;Hello&#x27;, &#x27;Published&#x27;, &#x27;2026-01-01&#x27;),
+         (1, NULL, &#x27;Draft one&#x27;, &#x27;Draft&#x27;, &#x27;2026-01-02&#x27;),
+         (2, NULL, &#x27;Bob post&#x27;, &#x27;Published&#x27;, &#x27;2026-01-03&#x27;);
 blog=&gt; EXECUTE by_author(&#x27;ada&#x27;);
 blog=&gt; EXECUTE editor_of(2);
 blog=&gt; EXECUTE drafts;
+blog=&gt; SELECT id, author, title, status FROM post;
 blog=&gt; \q</pre><div class="cwin-out"><pre> id | title
 ----+-------
   1 | Hello
@@ -217,7 +232,15 @@ blog=&gt; \q</pre><div class="cwin-out"><pre> id | title
  count
 -------
      1
-(1 row)</pre></div></div>
+(1 row)
+
+ id | author |   title   |  status
+----+--------+-----------+-----------
+  1 |      1 | Hello     | Published
+  2 |      1 | Draft one | Draft
+  3 |      2 | Bob post  | Published
+(3 rows)</pre></div></div>
+<p class="lede"><strong>If it does not:</strong> <em>prepared statement "by_author" does not exist</em> — this is a new session, the <code>PREPARE</code>s of the last one are gone: <code>\i queries.sql</code> again. <em>duplicate key value violates unique constraint</em> — the rows are already in; go on. A prompt that turns into <code>blog-&gt;</code> is waiting for the semicolon you forgot.</p>
 <p class="lede"><code>editor_of(2)</code> answers one row holding nothing: post 2 exists and has no editor. That is the left join the <code>?.</code> in the file asked for. <code>by_author('ada')</code> answers one post, not two: the file says <code>status == Published</code>, and Ada's second post is a draft.</p>
 </section>
 <section class="band" id="write-a-keal-program-that-uses-it"><h2>11. Write a Keal program that uses it</h2>
@@ -233,9 +256,17 @@ for (p in db.byAuthor(&quot;ada&quot;)) {
 }
 val editor = db.editorOf(1)
 println(&quot;editor of #1: ${editor ?: &quot;none&quot;}&quot;)
+
+// A change: the draft goes out, and its row comes back as a record.
+val post = db.publish(2)
+println(&quot;published: ${post.headline()}&quot;)
+println(&quot;drafts now: ${db.drafts()}&quot;)
+for (p in db.byAuthor(&quot;ada&quot;)) {
+    println(&quot;#${p.id} ${p.title}&quot;)
+}
 db.close()</pre></div>
-<p class="lede"><code>createBlog("", "blog")</code>: the first argument is a libpq connection string — empty, it uses the same defaults as <code>psql</code> (your user, the local server); the second is the database's name, made if it does not exist. Here it exists, with rows, so the call only connects.</p>
-<p class="lede"><code>db.byAuthor("ada")</code> answers a list of records with <code>id</code> and <code>title</code>; <code>db.editorOf(1)</code> answers a <code>String?</code>, which is why <code>?: "none"</code> is there.</p>
+<p class="lede"><code>createBlog("", "blog")</code>: the first argument is a libpq connection string — empty, it uses the same defaults as <code>psql</code> (your user, the local server); the second is the database's name, made if it does not exist. Here it exists, with rows, so the call only connects. Every <code>func</code> and <code>proc</code> of the file is a method on <code>db</code>, with the parameters and the result the file declares.</p>
+<p class="lede"><code>db.drafts()</code> answers an <code>Int</code>. <code>db.byAuthor("ada")</code> answers a list of records with <code>id</code> and <code>title</code>. <code>db.editorOf(1)</code> answers a <code>String?</code>, which is why <code>?: "none"</code> is there. <code>db.publish(2)</code> is the change: it runs the <code>UPDATE</code> and answers the row it changed, as a <code>Post</code> — a record with the table's columns and the <code>headline()</code> method the table declares. Nothing here is SQL: a column the file does not have, or a wrong type, stops the build.</p>
 </section>
 <section class="band" id="build-and-run-it"><h2>12. Build and run it</h2>
 <p class="lede">The program links against <code>libpq</code>, PostgreSQL's client library; the two flags say where its header and its library are.</p>
@@ -244,9 +275,14 @@ db.close()</pre></div>
 ls .kealsql</pre><div class="cwin-out"><pre>drafts: 1
 #1 Hello
 editor of #1: bob
+published: Draft one [Published]
+drafts now: 0
+#2 Draft one
+#1 Hello
 blog.client.keal</pre></div></div>
+<p class="lede">Ada's second post was a draft, so <code>byAuthor</code> did not list it; published, it comes first, being the newer. Run <code>./app</code> again: the first line now says <code>drafts: 0</code>, because the change was written to the database — it is not the program's memory. <code>psql -d blog -c 'SELECT * FROM post'</code> shows it from the other side, any time.</p>
 <p class="lede">The <code>.kealsql/</code> directory holds the generated module. Commit it with the project: a checkout then builds without <code>kealsql</code> installed, and Keal regenerates it whenever <code>blog.kealsql</code> is newer.</p>
-<p class="lede"><strong>If it does not:</strong> <em>cannot generate … `kealsql` is not installed</em> — the binary of step 6 is not on the path; <code>export KEALSQL=/path/to/kealsql</code>. <em>libpq-fe.h: No such file</em> — install <code>libpq-dev</code> (Linux) and check <code>pg_config --includedir</code>. <em>connection refused</em> or <em>authentication failed</em> — step 5.</p>
+<p class="lede"><strong>If it does not:</strong> <em>cannot generate … `kealsql` is not installed</em> — the binary of step 5 is not on the path; <code>export KEALSQL=/path/to/kealsql</code>. <em>libpq-fe.h: No such file</em> — install <code>libpq-dev</code> (Linux) and check <code>pg_config --includedir</code>. <em>connection refused</em> or <em>authentication failed</em> — step 4.</p>
 </section>
 <section class="band" id="change-the-file-and-let-the-compiler-catch-you"><h2>13. Change the file, and let the compiler catch you</h2>
 <p class="lede">Rename the query <code>drafts</code> to <code>draftCount</code> in <code>blog.kealsql</code> and build the program again, without touching it:</p>
