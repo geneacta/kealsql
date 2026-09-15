@@ -43,31 +43,50 @@ func zeroOf(t: TypeN): String {
     }
 }
 
-/// The Keal type a query's value has. Dates, times, uuids, enums and bytes
-/// are their SQL text.
-package func kealType(ty: Ty): String {
+/// The Keal type a query's value has. An enum is the Keal enum the module
+/// declares for it; dates, times, uuids and bytes are their SQL text.
+package func kealType(ty: Ty, schema: Schema): String {
     val base = when (ty.name) {
         "Int", "BigInt" -> "Int"
         "Float" -> "Float"
         "Bool", "Bool3" -> "Bool"
-        else -> if (ty.name.startsWith("row:")) { ty.name.drop(4) } else { "String" }
+        else -> if (ty.name.startsWith("row:")) { ty.name.drop(4) }
+                else if (schema.isEnum(ty.name)) { ty.name }
+                else { "String" }
     }
     return if (ty.optional) { base + "?" } else { base }
 }
 
 /// The expression that reads cell `col` of row `i` as a Keal value.
-func cellExpr(ty: Ty, col: Int): String { cellExprOn("spi", ty, col) }
+func cellExpr(ty: Ty, col: Int, schema: Schema): String { cellExprOn("spi", ty, col, schema) }
 
 /// The same, on a named bridge: `spi` inside PostgreSQL, `kc` in a client.
-package func cellExprOn(b: String, ty: Ty, col: Int): String {
+package func cellExprOn(b: String, ty: Ty, col: Int, schema: Schema): String {
     val get = when (ty.name) {
         "Int", "BigInt" -> "${b}Int(i, ${col})"
         "Float" -> "${b}Float(i, ${col})"
         "Bool", "Bool3" -> "${b}Bool(i, ${col})"
-        else -> "${b}Str(i, ${col})"
+        else -> if (schema.isEnum(ty.name)) { "fromText${ty.name}(${b}Str(i, ${col}))" } else { "${b}Str(i, ${col})" }
     }
     if (ty.optional) { return "if (${b}IsNull(i, ${col})) { null } else { ${get} }" }
     return get
+}
+
+/// The file's enums as Keal enums, each with the function that reads it
+/// from its SQL text — a cell, or a trigger's row. Writing one is `"" + v`:
+/// a variant renders as its bare name, which is the label.
+package func enumDecls(program: ProgramN, vis: String): String {
+    var out = ""
+    for (e in program.enums) {
+        out += "${vis}enum ${e.name} { ${e.values.join(", ")} }\n"
+        out += "${vis}func fromText${e.name}(s: String): ${e.name} {\n"
+        out += "    return when (s) {\n"
+        for (v in e.values) { out += "        \"${v}\" -> ${e.name}.${v}\n" }
+        out += "        else -> { throw \"not a ${e.name}: \" + s }\n"
+        out += "    }\n"
+        out += "}\n\n"
+    }
+    return out
 }
 
 func cEscape(s: String): String {
@@ -105,14 +124,15 @@ package func plkealSource(compiler: Compiler): String {
         val elem = compiler.storedElem(s)
         if (schema.tables.containsKey(elem.name) and not rowTables.contains(elem.name)) { rowTables.add(elem.name) }
     }
+    out += enumDecls(program, "")
     for (tr in program.traits) { out += tr.text + "\n\n" }
     for (name in rowTables) {
         val t = schema.tables[name]!!
-        out += recordDeclOf(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }), t.decl.traits, t.decl.methods, "")
+        out += recordDeclOf(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty(), schema) }), t.decl.traits, t.decl.methods, "")
     }
     for (q in queries) {
         if (q.rowTable == "" and q.colTys.size > 1) {
-            out += recordDecl(rowRecord(q), q.colNames, q.colTys.map({ kealType(it) }))
+            out += recordDecl(rowRecord(q), q.colNames, q.colTys.map({ kealType(it, schema) }))
         }
     }
     out += "\n"
@@ -158,7 +178,7 @@ package func plkealSource(compiler: Compiler): String {
                 var c = 0
                 val names: List<String> = []
                 for (col in t.columns) {
-                    out += "    val c${c}: ${kealType(col.ty())} = ${cellExpr(col.ty(), c).replace("spi", "trg").replace("(i, ", "(which, ")}\n"
+                    out += "    val c${c}: ${kealType(col.ty(), schema)} = ${cellExpr(col.ty(), c, schema).replace("spi", "trg").replace("(i, ", "(which, ")}\n"
                     names.add("c${c}")
                     c += 1
                 }
@@ -550,7 +570,7 @@ func queryWrapper(q: QueryInfo, slot: Int, schema: Schema): String { queryWrappe
 /// `b` names the bridge; `handle` is the connection expression a client
 /// passes to it ("" inside PostgreSQL, where there is one connection).
 package func queryWrapperOn(b: String, handle: String, q: QueryInfo, slot: Int, schema: Schema): String {
-    val params = q.params.map({ "${it.name}: ${kealType(it.ty)}" }).join(", ")
+    val params = q.params.map({ "${it.name}: ${kealType(it.ty, schema)}" }).join(", ")
     val run = if (handle == "") { "${b}Run(${slot})" } else { "${b}Run(${handle}, ${slot})" }
     val one = when (q.kind) {
         "count" -> "Int"
@@ -559,7 +579,7 @@ package func queryWrapperOn(b: String, handle: String, q: QueryInfo, slot: Int, 
         "none" -> ""
         else -> {
             if (q.rowTable != "") { q.rowTable }
-            else if (q.colTys.size == 1) { kealType(q.colTys[0]) }
+            else if (q.colTys.size == 1) { kealType(q.colTys[0], schema) }
             else { rowRecord(q) }
         }
     }
@@ -592,7 +612,7 @@ package func queryWrapperOn(b: String, handle: String, q: QueryInfo, slot: Int, 
         var c = 0
         val names: List<String> = []
         for (col in t.columns) {
-            decl += "        val c${c}: ${kealType(col.ty())} = ${cellExprOn(b, col.ty(), c)}\n"
+            decl += "        val c${c}: ${kealType(col.ty(), schema)} = ${cellExprOn(b, col.ty(), c, schema)}\n"
             names.add("c${c}")
             c += 1
         }
@@ -605,7 +625,7 @@ package func queryWrapperOn(b: String, handle: String, q: QueryInfo, slot: Int, 
         var c = 0
         val names: List<String> = []
         for (ty in q.colTys) {
-            decl += "        val c${c}: ${kealType(ty)} = ${cellExprOn(b, ty, c)}\n"
+            decl += "        val c${c}: ${kealType(ty, schema)} = ${cellExprOn(b, ty, c, schema)}\n"
             names.add("c${c}")
             c += 1
         }

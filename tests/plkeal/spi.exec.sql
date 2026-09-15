@@ -8,6 +8,7 @@ SELECT safe_award('ada', 42), safe_award('nobody', 1);
 SELECT karma FROM "user" WHERE name = 'ada';
 SELECT draft_and_count('bob', 'Four');
 SELECT id, author, title, status FROM post WHERE title = 'Four';
+SELECT state_of('bob', 'Five');
 \set ON_ERROR_STOP off
 SELECT describe('nobody');
 SELECT award_big('ada');

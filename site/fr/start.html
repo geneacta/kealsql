@@ -214,7 +214,12 @@ db.close()
 val tx = connectBlog(&quot;&quot;)
 val before = tx.drafts()
 val kept = tx.transaction({ t -&gt;
-    t.publish(2)
+    val fresh = t.publish(2)
+    val state = when (fresh.status) {                   // an enum column is a Keal enum: this `when` closes
+        Status.Draft -&gt; &quot;still a draft&quot;
+        Status.Published -&gt; &quot;out, as ${fresh.status}&quot;   // a variant renders as its label
+    }
+    println(&quot;#${fresh.id} is ${state}&quot;)
     t.drafts()
 })
 println(&quot;transaction: drafts ${before} -&gt; ${kept}, committed ${tx.drafts()}&quot;)
@@ -270,6 +275,7 @@ editor of #2: none
 drafts after rollback: 1
 caught: publish: expected one row, got 0
 posts left: 2
+#2 is out, as Published
 transaction: drafts 1 -&gt; 0, committed 0
 rolled back: publish: expected one row, got 0
 ada still has 2 post(s)

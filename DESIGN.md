@@ -232,7 +232,12 @@ primitive and buy nothing.
 
 A Keal `enum` declares a PostgreSQL enum type. A `when` over it closes
 without `else`; add a variant and every query that forgot it is a compile
-error.
+error. The enum crosses the bridge as itself: the module a stored function
+or a client is built from declares the same Keal `enum`, a row's field of
+that type holds a variant, and a `when` over it in the application closes
+too. The label is the variant's name — a variant renders as its bare
+name, so writing one is writing a string, and reading one is a `when`
+over the labels the module generates.
 
 ### `record` ↔ row
 
@@ -511,8 +516,9 @@ The other end of the same bridge: `--client` writes a Keal module in which
 every `func` / `proc` of the file is a method on a connection, with the
 types a stored function gets through SPI — the generator is the same, on
 libpq instead of SPI. Statements are prepared once per connection on first
-use, parameters travel as text and cells come back as text, an error is a
-Keal exception with the query's name. It is what makes the `PREPARE`
+use, parameters travel as text and cells come back as text — an `Int`, a
+`Float`, a `Bool` and an enum are parsed on the way in, the rest stays its
+SQL text — an error is a Keal exception with the query's name. It is what makes the `PREPARE`
 output more than a `psql` convenience: the application never writes SQL,
 and a column the schema does not have is a compile error in the
 application too, because the record it reads is generated from the schema.

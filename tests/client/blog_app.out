@@ -14,6 +14,7 @@ editor of #2: none
 drafts after rollback: 1
 caught: publish: expected one row, got 0
 posts left: 2
+#2 is out, as Published
 transaction: drafts 1 -> 0, committed 0
 rolled back: publish: expected one row, got 0
 ada still has 2 post(s)

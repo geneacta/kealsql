@@ -19,8 +19,11 @@ draft_and_count
 id|author|title|status
 4|2|Four|Draft
 (1 row)
-psql:tests/plkeal/spi.exec.sql:12: ERROR:  no user named nobody
-psql:tests/plkeal/spi.exec.sql:13: ERROR:  award: value "9223372036854775807" is out of range for type integer
+state_of
+Five is a draft (Draft)
+(1 row)
+psql:tests/plkeal/spi.exec.sql:13: ERROR:  no user named nobody
+psql:tests/plkeal/spi.exec.sql:14: ERROR:  award: value "9223372036854775807" is out of range for type integer
 karma
 42
 (1 row)

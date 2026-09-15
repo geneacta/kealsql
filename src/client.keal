@@ -49,14 +49,15 @@ package func clientSource(compiler: Compiler): String {
     // ---- rows as records, as plkeal makes them
     val rowTables: List<String> = []
     for (q in queries) { if (q.rowTable != "" and not rowTables.contains(q.rowTable)) { rowTables.add(q.rowTable) } }
+    out += enumDecls(program, "public ")
     for (tr in program.traits) { out += "public " + tr.text + "\n\n" }
     for (name in rowTables) {
         val t = schema.tables[name]!!
-        out += recordDeclOf(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty()) }), t.decl.traits, t.decl.methods, "public ")
+        out += recordDeclOf(name, t.columns.map({ it.name }), t.columns.map({ kealType(it.ty(), schema) }), t.decl.traits, t.decl.methods, "public ")
     }
     for (q in queries) {
         if (q.rowTable == "" and q.colTys.size > 1) {
-            out += recordDeclOn(rowRecordOf(q), q.colNames, q.colTys.map({ kealType(it) }))
+            out += recordDeclOn(rowRecordOf(q), q.colNames, q.colTys.map({ kealType(it, schema) }))
         }
     }
     out += "\n"

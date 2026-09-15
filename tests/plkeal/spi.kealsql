@@ -88,6 +88,18 @@ stored func draftAndCount(name: String, title: String): Int {
     return p.id * 1000 + published()
 }
 
+// An enum column is a Keal enum: a `when` over it closes without `else`,
+// and a variant renders as its label.
+stored func stateOf(name: String, title: String): String {
+    val u = userNamed(name)
+    if (u == null) { throw "no user named " + name }
+    val p = newPost(u.id, title)
+    return when (p.status) {
+        Status.Draft -> "${p.title} is a draft (${p.status})"
+        Status.Published -> "${p.title} is out"
+    }
+}
+
 // Uncaught, a query error is a SQL error — and the backend lives on.
 stored func awardBig(name: String): String {
     val u = userNamed(name)

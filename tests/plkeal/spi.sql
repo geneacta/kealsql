@@ -26,6 +26,9 @@ CREATE OR REPLACE FUNCTION safe_award(text, bigint) RETURNS text
 CREATE OR REPLACE FUNCTION draft_and_count(text, text) RETURNS bigint
     AS '$libdir/spi', 'kealsql_draft_and_count' LANGUAGE C STRICT;
 
+CREATE OR REPLACE FUNCTION state_of(text, text) RETURNS text
+    AS '$libdir/spi', 'kealsql_state_of' LANGUAGE C STRICT;
+
 CREATE OR REPLACE FUNCTION award_big(text) RETURNS text
     AS '$libdir/spi', 'kealsql_award_big' LANGUAGE C STRICT;
 
